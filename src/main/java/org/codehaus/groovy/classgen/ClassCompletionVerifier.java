@@ -43,7 +43,6 @@ import org.codehaus.groovy.ast.expr.VariableExpression;
 import org.codehaus.groovy.ast.stmt.CatchStatement;
 import org.codehaus.groovy.ast.tools.GeneralUtils;
 import org.codehaus.groovy.control.SourceUnit;
-import org.codehaus.groovy.runtime.MetaClassHelper;
 import org.codehaus.groovy.syntax.Types;
 import org.codehaus.groovy.transform.trait.Traits;
 
@@ -62,6 +61,7 @@ import static java.lang.reflect.Modifier.isStrict;
 import static java.lang.reflect.Modifier.isSynchronized;
 import static java.lang.reflect.Modifier.isTransient;
 import static java.lang.reflect.Modifier.isVolatile;
+import static org.apache.groovy.util.BeanUtils.capitalize;
 import static org.codehaus.groovy.ast.ClassHelper.VOID_TYPE;
 import static org.objectweb.asm.Opcodes.ACC_ABSTRACT;
 import static org.objectweb.asm.Opcodes.ACC_FINAL;
@@ -188,10 +188,7 @@ public class ClassCompletionVerifier extends ClassCodeVisitorSupport {
         // we only do check abstract classes (including enums), no interfaces or non-abstract classes
         if (!isAbstract(node.getModifiers()) || isInterface(node.getModifiers())) return;
 
-        List<MethodNode> abstractMethods = node.getAbstractMethods();
-        if (abstractMethods == null || abstractMethods.isEmpty()) return;
-
-        for (MethodNode method : abstractMethods) {
+        for (MethodNode method : node.getAbstractMethods()) {
             if (method.isPrivate()) {
                 addError("Method '" + method.getName() + "' from " + getDescription(node) +
                         " must not be private as it is declared as an abstract method.", method);
@@ -201,10 +198,15 @@ public class ClassCompletionVerifier extends ClassCodeVisitorSupport {
 
     private void checkNoAbstractMethodsNonabstractClass(ClassNode node) {
         if (isAbstract(node.getModifiers())) return;
-        List<MethodNode> abstractMethods = node.getAbstractMethods();
-        if (abstractMethods == null) return;
-        for (MethodNode method : abstractMethods) {
+        for (MethodNode method : node.getAbstractMethods()) {
             MethodNode sameArgsMethod = node.getMethod(method.getName(), method.getParameters());
+            if (null == sameArgsMethod) {
+                sameArgsMethod = ClassHelper.GROOVY_OBJECT_TYPE.getMethod(method.getName(), method.getParameters());
+                if (null != sameArgsMethod && !sameArgsMethod.isAbstract() && method.getReturnType().equals(sameArgsMethod.getReturnType())) {
+                    return;
+                }
+            }
+
             if (sameArgsMethod==null || method.getReturnType().equals(sameArgsMethod.getReturnType())) {
                 addError("Can't have an abstract method in a non-abstract class." +
                         " The " + getDescription(node) + " must be declared abstract or" +
@@ -411,7 +413,7 @@ public class ClassCompletionVerifier extends ClassCodeVisitorSupport {
         msg.append(" in ");
         msg.append(superMethod.getDeclaringClass().getName());
         msg.append("; attempting to assign weaker access privileges; was ");
-        msg.append(superMethod.isPublic() ? "public" : "protected");
+        msg.append(superMethod.isPublic() ? "public" : (superMethod.isProtected() ? "protected" : "package-private"));
         addError(msg.toString(), method);
     }
 
@@ -463,8 +465,9 @@ public class ClassCompletionVerifier extends ClassCodeVisitorSupport {
         for (MethodNode superMethod : cn.getSuperClass().getMethods(mn.getName())) {
             Parameter[] superParams = superMethod.getParameters();
             if (!hasEqualParameterTypes(params, superParams)) continue;
-            if ((mn.isPrivate() && !superMethod.isPrivate()) ||
-                    (mn.isProtected() && superMethod.isPublic())) {
+            if ((mn.isPrivate() && !superMethod.isPrivate())
+                    || (mn.isProtected() && !superMethod.isProtected() && !superMethod.isPackageScope() && !superMethod.isPrivate())
+                    || (!mn.isPrivate() && !mn.isProtected() && !mn.isPublic() && (superMethod.isPublic() || superMethod.isProtected()))) {
                 addWeakerAccessError(cn, mn, params, superMethod);
                 return;
             }
@@ -537,11 +540,11 @@ public class ClassCompletionVerifier extends ClassCodeVisitorSupport {
     private void checkDuplicateProperties(PropertyNode node) {
         ClassNode cn = node.getDeclaringClass();
         String name = node.getName();
-        String getterName = "get" + MetaClassHelper.capitalize(name);
+        String getterName = "get" + capitalize(name);
         if (Character.isUpperCase(name.charAt(0))) {
             for (PropertyNode propNode : cn.getProperties()) {
                 String otherName = propNode.getField().getName();
-                String otherGetterName = "get" + MetaClassHelper.capitalize(otherName);
+                String otherGetterName = "get" + capitalize(otherName);
                 if (node != propNode && getterName.equals(otherGetterName)) {
                     String msg = "The field " + name + " and " + otherName + " on the class " +
                             cn.getName() + " will result in duplicate JavaBean properties, which is not allowed";
@@ -701,20 +704,20 @@ public class ClassCompletionVerifier extends ClassCodeVisitorSupport {
             checkGenericsUsage(ref, node);
         }
     }
-    
+
     private void checkGenericsUsage(ASTNode ref, Parameter[] params) {
         for (Parameter p : params) {
             checkGenericsUsage(ref, p.getType());
         }
     }
-    
+
     private void checkGenericsUsage(ASTNode ref, ClassNode node) {
         if (node.isArray()) {
             checkGenericsUsage(ref, node.getComponentType());
         } else if (!node.isRedirectNode() && node.isUsingGenerics()) {
-            addError(   
+            addError(
                     "A transform used a generics containing ClassNode "+ node + " " +
-                    "for "+getRefDescriptor(ref) + 
+                    "for "+getRefDescriptor(ref) +
                     "directly. You are not supposed to do this. " +
                     "Please create a new ClassNode referring to the old ClassNode " +
                     "and use the new ClassNode instead of the old one. Otherwise " +

@@ -83,9 +83,6 @@ import java.util.Map;
  * </pre></code>
  *
  * @see groovy.json.JsonParserType
- *
- * @author Guillaume Laforge
- * @author Rick Hightower
  * @since 1.8.0
  */
 public class JsonSlurper {
@@ -199,7 +196,7 @@ public class JsonSlurper {
      * @return a data structure of lists and maps
      */
     public Object parseText(String text) {
-        if (text == null || "".equals(text)) {
+        if (text == null || text.isEmpty()) {
             throw new IllegalArgumentException("Text must not be null or empty");
         }
         return createParser().parse(text);

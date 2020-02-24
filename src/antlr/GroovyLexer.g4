@@ -38,7 +38,6 @@ options {
 }
 
 @header {
-    import static org.apache.groovy.parser.antlr4.SemanticPredicates.*;
     import java.util.Deque;
     import java.util.ArrayDeque;
     import java.util.Map;
@@ -47,9 +46,16 @@ options {
     import java.util.HashSet;
     import java.util.Collections;
     import java.util.Arrays;
+    import java.util.stream.IntStream;
+    import java.util.logging.Logger;
+    import java.util.logging.Level;
+    import java.util.EmptyStackException;
+    import org.apache.groovy.util.Maps;
+    import static org.apache.groovy.parser.antlr4.SemanticPredicates.*;
 }
 
 @members {
+    private static final Logger LOGGER = Logger.getLogger(GroovyLexer.class.getName());
     private long tokenIndex     = 0;
     private int  lastTokenType  = 0;
     private int  invalidDigitCount = 0;
@@ -73,11 +79,14 @@ options {
         super.emit(token);
     }
 
-    private static final Set<Integer> REGEX_CHECK_SET =
-                                            Collections.unmodifiableSet(
-                                                new HashSet<>(Arrays.asList(Identifier, CapitalizedIdentifier, NullLiteral, BooleanLiteral, THIS, RPAREN, RBRACK, RBRACE, IntegerLiteral, FloatingPointLiteral, StringLiteral, GStringEnd, INC, DEC)));
+    private static final int[] REGEX_CHECK_ARRAY =
+                                    IntStream.of(
+                                        Identifier, CapitalizedIdentifier, NullLiteral, BooleanLiteral, THIS, RPAREN, RBRACK, RBRACE,
+                                        IntegerLiteral, FloatingPointLiteral, StringLiteral, GStringEnd, INC, DEC
+                                    ).sorted().toArray();
+
     private boolean isRegexAllowed() {
-        if (REGEX_CHECK_SET.contains(this.lastTokenType)) {
+        if (Arrays.binarySearch(REGEX_CHECK_ARRAY, this.lastTokenType) >= 0) {
             return false;
         }
 
@@ -135,26 +144,25 @@ options {
         }
     }
 
-    private static final Map<String, String> PAREN_MAP = Collections.unmodifiableMap(new HashMap<String, String>() {
-        {
-            put("(", ")");
-            put("[", "]");
-            put("{", "}");
-        }
-    });
+    protected void enterParenCallback(String text) {}
+
+    protected void exitParenCallback(String text) {}
 
     private final Deque<Paren> parenStack = new ArrayDeque<>(32);
+
     private void enterParen() {
-        parenStack.push(new Paren(getText(), this.lastTokenType, getLine(), getCharPositionInLine()));
-    }
-    private void exitParen() {
-        Paren paren = parenStack.peek();
         String text = getText();
+        enterParenCallback(text);
 
-        require(null != paren, "Too many '" + text + "'");
-        require(text.equals(PAREN_MAP.get(paren.getText())),
-                "'" + paren.getText() + "'" + new PositionInfo(paren.getLine(), paren.getColumn()) + " can not match '" + text + "'", -1);
+        parenStack.push(new Paren(text, this.lastTokenType, getLine(), getCharPositionInLine()));
+    }
 
+    private void exitParen() {
+        String text = getText();
+        exitParenCallback(text);
+
+        Paren paren = parenStack.peek();
+        if (null == paren) return;
         parenStack.pop();
     }
     private boolean isInsideParens() {
@@ -165,6 +173,7 @@ options {
         if (null == paren) {
             return false;
         }
+
         return ("(".equals(paren.getText()) && TRY != paren.getLastTokenType()) // we don't treat try-paren(i.e. try (....)) as parenthesis
                     || "[".equals(paren.getText());
     }
@@ -196,6 +205,19 @@ options {
     @Override
     public int getErrorColumn() {
         return getCharPositionInLine() + 1;
+    }
+
+    @Override
+    public int popMode() {
+        try {
+            return super.popMode();
+        } catch (EmptyStackException ignored) { // raised when parens are unmatched: too many ), ], or }
+            if (LOGGER.isLoggable(Level.FINEST)) {
+                LOGGER.finest(org.codehaus.groovy.runtime.DefaultGroovyMethods.asString(ignored));
+            }
+        }
+
+        return Integer.MIN_VALUE;
     }
 }
 
@@ -287,7 +309,8 @@ GStringPathPart
 RollBackOne
     :   . {
             // a trick to handle GStrings followed by EOF properly
-            if (EOF == _input.LA(1) && ('"' == _input.LA(-1) || '/' == _input.LA(-1))) {
+            int readChar = _input.LA(-1);
+            if (EOF == _input.LA(1) && ('"' == readChar || '/' == readChar)) {
                 setType(GStringEnd);
             } else {
                 setChannel(HIDDEN);
@@ -300,14 +323,14 @@ mode DEFAULT_MODE;
 // character in the double quotation string. e.g. "a"
 fragment
 DqStringCharacter
-    :   ~["\\$]
+    :   ~["\r\n\\$]
     |   EscapeSequence
     ;
 
 // character in the single quotation string. e.g. 'a'
 fragment
 SqStringCharacter
-    :   ~['\\]
+    :   ~['\r\n\\]
     |   EscapeSequence
     ;
 
@@ -696,7 +719,12 @@ DollarEscape
 
 fragment
 LineEscape
-    :   Backslash '\r'? '\n'
+    :   Backslash LineTerminator
+    ;
+
+fragment
+LineTerminator
+    :   '\r'? '\n' | '\r'
     ;
 
 fragment
@@ -792,8 +820,10 @@ NOT_IN              : '!in'         { isFollowedBy(_input, ' ', '\t', '\r', '\n'
 
 LPAREN          : '('  { this.enterParen();     } -> pushMode(DEFAULT_MODE);
 RPAREN          : ')'  { this.exitParen();      } -> popMode;
+
 LBRACE          : '{'  { this.enterParen();     } -> pushMode(DEFAULT_MODE);
 RBRACE          : '}'  { this.exitParen();      } -> popMode;
+
 LBRACK          : '['  { this.enterParen();     } -> pushMode(DEFAULT_MODE);
 RBRACK          : ']'  { this.exitParen();      } -> popMode;
 
@@ -916,7 +946,7 @@ WS  :  ([ \t\u000C]+ | LineEscape+)     -> skip
 
 
 // Inside (...) and [...] but not {...}, ignore newlines.
-NL  : '\r'? '\n'            { this.ignoreTokenInsideParens(); }
+NL  : LineTerminator   { this.ignoreTokenInsideParens(); }
     ;
 
 // Multiple-line comments(including groovydoc comments)

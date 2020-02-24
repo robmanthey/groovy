@@ -30,8 +30,6 @@ import static org.apache.groovy.json.internal.Exceptions.die;
  * This map is for object serialization mainly.
  * The idea is the final conversion of
  * the Value objects are delayed until the last possible moment, i.e., just before injected into a bean.
- *
- * @author Rick Hightower
  */
 public class ValueMapImpl extends AbstractMap<String, Value> implements ValueMap<String, Value> {
 
@@ -43,6 +41,7 @@ public class ValueMapImpl extends AbstractMap<String, Value> implements ValueMap
     /**
      * The items held in the map.
      */
+    @SuppressWarnings("unchecked")
     private Entry<String, Value>[] items = new Entry[20];
 
     /* The current length of the map. */

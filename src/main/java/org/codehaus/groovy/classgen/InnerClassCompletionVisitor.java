@@ -31,8 +31,6 @@ import org.codehaus.groovy.ast.expr.Expression;
 import org.codehaus.groovy.ast.expr.TupleExpression;
 import org.codehaus.groovy.ast.expr.VariableExpression;
 import org.codehaus.groovy.ast.stmt.BlockStatement;
-import org.codehaus.groovy.ast.stmt.ExpressionStatement;
-import org.codehaus.groovy.ast.stmt.Statement;
 import org.codehaus.groovy.classgen.asm.BytecodeHelper;
 import org.codehaus.groovy.control.CompilationUnit;
 import org.codehaus.groovy.control.SourceUnit;
@@ -41,7 +39,14 @@ import org.objectweb.asm.Opcodes;
 
 import java.util.List;
 
+import static org.apache.groovy.ast.tools.ClassNodeUtils.addGeneratedConstructor;
+import static org.apache.groovy.ast.tools.MethodNodeUtils.getCodeAsBlock;
+import static org.apache.groovy.ast.tools.ConstructorNodeUtils.getFirstIfSpecialConstructorCall;
 import static org.codehaus.groovy.ast.ClassHelper.CLOSURE_TYPE;
+import static org.codehaus.groovy.ast.tools.GeneralUtils.block;
+import static org.codehaus.groovy.ast.tools.GeneralUtils.ctorSuperX;
+import static org.codehaus.groovy.ast.tools.GeneralUtils.stmt;
+import static org.codehaus.groovy.ast.tools.GeneralUtils.varX;
 
 public class InnerClassCompletionVisitor extends InnerClassVisitorHelper implements Opcodes {
 
@@ -71,8 +76,8 @@ public class InnerClassCompletionVisitor extends InnerClassVisitorHelper impleme
             innerClass = (InnerClassNode) node;
             thisField = innerClass.getField("this$0");
             if (innerClass.getVariableScope() == null && innerClass.getDeclaredConstructors().isEmpty()) {
-                // add dummy constructor
-                innerClass.addConstructor(ACC_PUBLIC, Parameter.EMPTY_ARRAY, null, null);
+                // add empty default constructor
+                addGeneratedConstructor(innerClass, ACC_PUBLIC, Parameter.EMPTY_ARRAY, null, null);
             }
         }
         if (node.isEnum() || node.isInterface()) return;
@@ -159,7 +164,7 @@ public class InnerClassCompletionVisitor extends InnerClassVisitorHelper impleme
 
     private void getThis(MethodVisitor mv, String classInternalName, String outerClassDescriptor, String innerClassInternalName) {
         mv.visitVarInsn(ALOAD, 0);
-        if (CLOSURE_TYPE.equals(thisField.getType())) {
+        if (thisField != null && CLOSURE_TYPE.equals(thisField.getType())) {
             mv.visitFieldInsn(GETFIELD, classInternalName, "this$0", CLOSURE_DESCRIPTOR);
             mv.visitMethodInsn(INVOKEVIRTUAL, CLOSURE_INTERNAL_NAME, "getThisObject", "()Ljava/lang/Object;", false);
             mv.visitTypeInsn(CHECKCAST, innerClassInternalName);
@@ -167,12 +172,12 @@ public class InnerClassCompletionVisitor extends InnerClassVisitorHelper impleme
             mv.visitFieldInsn(GETFIELD, classInternalName, "this$0", outerClassDescriptor);
         }
     }
-    
+
     private void addDefaultMethods(InnerClassNode node) {
         final boolean isStatic = isStatic(node);
 
         ClassNode outerClass = node.getOuterClass();
-        final String classInternalName = org.codehaus.groovy.classgen.asm.BytecodeHelper.getClassInternalName(node);
+        final String classInternalName = BytecodeHelper.getClassInternalName(node);
         final String outerClassInternalName = getInternalName(outerClass, isStatic);
         final String outerClassDescriptor = getTypeDescriptor(outerClass, isStatic);
         final int objectDistance = getObjectDistance(outerClass);
@@ -348,7 +353,7 @@ public class InnerClassCompletionVisitor extends InnerClassVisitorHelper impleme
     private void addCompilationErrorOnCustomMethodNode(InnerClassNode node, String methodName, Parameter[] parameters) {
         MethodNode existingMethodNode = node.getMethod(methodName, parameters);
         // if there is a user-defined methodNode, add compiler error msg and continue
-        if (existingMethodNode != null && !existingMethodNode.isSynthetic())  {
+        if (existingMethodNode != null && !isSynthetic(existingMethodNode))  {
             addError("\"" +methodName + "\" implementations are not supported on static inner classes as " +
                     "a synthetic version of \"" + methodName + "\" is added during compilation for the purpose " +
                     "of outer class delegation.",
@@ -356,9 +361,17 @@ public class InnerClassCompletionVisitor extends InnerClassVisitorHelper impleme
         }
     }
 
+    // GROOVY-8914: pre-compiled classes lose synthetic boolean - TODO fix earlier as per GROOVY-4346 then remove extra check here
+    private boolean isSynthetic(MethodNode existingMethodNode) {
+        return existingMethodNode.isSynthetic() || hasSyntheticModifier(existingMethodNode);
+    }
+
+    private boolean hasSyntheticModifier(MethodNode existingMethodNode) {
+        return (existingMethodNode.getModifiers() & Opcodes.ACC_SYNTHETIC) != 0;
+    }
+
     private void addThisReference(ConstructorNode node) {
         if (!shouldHandleImplicitThisForInnerClass(classNode)) return;
-        Statement code = node.getCode();
 
         // add "this$0" field init
 
@@ -372,27 +385,19 @@ public class InnerClassCompletionVisitor extends InnerClassVisitorHelper impleme
         newParams[0] = thisPara;
         node.setParameters(newParams);
 
-        BlockStatement block = null;
-        if (code == null) {
-            block = new BlockStatement();
-        } else if (!(code instanceof BlockStatement)) {
-            block = new BlockStatement();
-            block.addStatement(code);
-        } else {
-            block = (BlockStatement) code;
-        }
-        BlockStatement newCode = new BlockStatement();
+        BlockStatement block = getCodeAsBlock(node);
+        BlockStatement newCode = block();
         addFieldInit(thisPara, thisField, newCode);
         ConstructorCallExpression cce = getFirstIfSpecialConstructorCall(block);
         if (cce == null) {
-            cce = new ConstructorCallExpression(ClassNode.SUPER, new TupleExpression());
-            block.getStatements().add(0, new ExpressionStatement(cce));
+            cce = ctorSuperX(new TupleExpression());
+            block.getStatements().add(0, stmt(cce));
         }
         if (shouldImplicitlyPassThisPara(cce)) {
             // add thisPara to this(...)
             TupleExpression args = (TupleExpression) cce.getArguments();
             List<Expression> expressions = args.getExpressions();
-            VariableExpression ve = new VariableExpression(thisPara.getName());
+            VariableExpression ve = varX(thisPara.getName());
             ve.setAccessedVariable(thisPara);
             expressions.add(0, ve);
         }
@@ -436,19 +441,4 @@ public class InnerClassCompletionVisitor extends InnerClassVisitorHelper impleme
         return namePrefix;
     }
 
-    private static ConstructorCallExpression getFirstIfSpecialConstructorCall(BlockStatement code) {
-        if (code == null) return null;
-
-        final List<Statement> statementList = code.getStatements();
-        if (statementList.isEmpty()) return null;
-
-        final Statement statement = statementList.get(0);
-        if (!(statement instanceof ExpressionStatement)) return null;
-
-        Expression expression = ((ExpressionStatement) statement).getExpression();
-        if (!(expression instanceof ConstructorCallExpression)) return null;
-        ConstructorCallExpression cce = (ConstructorCallExpression) expression;
-        if (cce.isSpecialCall()) return cce;
-        return null;
-    }
 }

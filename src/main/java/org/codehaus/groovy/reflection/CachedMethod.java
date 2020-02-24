@@ -31,6 +31,7 @@ import org.codehaus.groovy.runtime.callsite.StaticMetaMethodSite;
 import org.codehaus.groovy.runtime.metaclass.MethodHelper;
 
 import java.io.Serializable;
+import java.lang.annotation.Annotation;
 import java.lang.ref.SoftReference;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
@@ -38,15 +39,15 @@ import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.Comparator;
 
-/**
- * @author Alex.Tkachman
- */
+import static org.codehaus.groovy.reflection.ReflectionUtils.makeAccessibleInPrivilegedAction;
+
 public class CachedMethod extends MetaMethod implements Comparable {
     public static final CachedMethod[] EMPTY_ARRAY = new CachedMethod[0];
     public final CachedClass cachedClass;
 
     private final Method cachedMethod;
     private int hashCode;
+    private CachedMethod transformedMethod;
 
     private static final MyComparator COMPARATOR = new MyComparator();
 
@@ -78,7 +79,7 @@ public class CachedMethod extends MetaMethod implements Comparable {
         return methods[i];
     }
 
-    protected Class[] getPT() {
+    public Class[] getPT() {
         return cachedMethod.getParameterTypes();
     }
 
@@ -95,6 +96,8 @@ public class CachedMethod extends MetaMethod implements Comparable {
     }
 
     public final Object invoke(Object object, Object[] arguments) {
+        makeAccessibleIfNecessary();
+
         try {
             AccessPermissionChecker.checkAccessPermission(cachedMethod);
         } catch (CacheAccessControlException ex) {
@@ -102,9 +105,7 @@ public class CachedMethod extends MetaMethod implements Comparable {
         }
         try {
             return cachedMethod.invoke(object, arguments);
-        } catch (IllegalArgumentException e) {
-            throw new InvokerInvocationException(e);
-        } catch (IllegalAccessException e) {
+        } catch (IllegalArgumentException | IllegalAccessException e) {
             throw new InvokerInvocationException(e);
         } catch (InvocationTargetException e) {
             Throwable cause = e.getCause(); 
@@ -135,6 +136,8 @@ public class CachedMethod extends MetaMethod implements Comparable {
     }
 
     public final Method setAccessible() {
+        makeAccessibleIfNecessary();
+
         AccessPermissionChecker.checkAccessPermission(cachedMethod);
 //        if (queuedToCompile.compareAndSet(false,true)) {
 //            if (isCompilable())
@@ -145,6 +148,14 @@ public class CachedMethod extends MetaMethod implements Comparable {
 
     public boolean isStatic() {
         return MethodHelper.isStatic(cachedMethod);
+    }
+
+    public CachedMethod getTransformedMethod() {
+        return transformedMethod;
+    }
+
+    public void setTransformedMethod(CachedMethod transformedMethod) {
+        this.transformedMethod = transformedMethod;
     }
 
     public int compareTo(Object o) {
@@ -337,10 +348,29 @@ public class CachedMethod extends MetaMethod implements Comparable {
         }
     }
 
+    public <T extends Annotation> T getAnnotation(Class<T> annotationClass) {
+        return cachedMethod.getAnnotation(annotationClass);
+    }
+
+    public boolean isSynthetic() {
+        return cachedMethod.isSynthetic();
+    }
+
     public Method getCachedMethod() {
+        makeAccessibleIfNecessary();
         AccessPermissionChecker.checkAccessPermission(cachedMethod);
         return cachedMethod;
     }
 
-}
+    public boolean canAccessLegally(Class<?> callerClass) {
+        return ReflectionUtils.checkAccessible(callerClass, cachedMethod.getDeclaringClass(), cachedMethod.getModifiers(), false);
+    }
 
+    private boolean makeAccessibleDone = false;
+    private void makeAccessibleIfNecessary() {
+        if (!makeAccessibleDone) {
+            makeAccessibleInPrivilegedAction(cachedMethod);
+            makeAccessibleDone = true;
+        }
+    }
+}

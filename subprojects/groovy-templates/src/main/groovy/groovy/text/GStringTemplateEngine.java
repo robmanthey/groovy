@@ -30,6 +30,7 @@ import org.codehaus.groovy.control.CompilationFailedException;
 
 import java.io.IOException;
 import java.io.Reader;
+import java.lang.reflect.InvocationTargetException;
 import java.security.AccessController;
 import java.security.PrivilegedAction;
 import java.util.Map;
@@ -188,12 +189,10 @@ public class GStringTemplateEngine extends TemplateEngine {
             templateExpressions.append("}}");
 
             // Use a new class loader by default for each class so each class can be independently garbage collected
-            final GroovyClassLoader loader = reuseClassLoader && parentLoader instanceof GroovyClassLoader?(GroovyClassLoader)parentLoader:(
-                    (GroovyClassLoader) AccessController.doPrivileged(new PrivilegedAction() {
-                        public Object run() {
-                            return new GroovyClassLoader(parentLoader);
-                        }
-                    }));
+            final GroovyClassLoader loader =
+                    reuseClassLoader && parentLoader instanceof GroovyClassLoader
+                            ? (GroovyClassLoader) parentLoader
+                            : AccessController.doPrivileged((PrivilegedAction<GroovyClassLoader>) () -> new GroovyClassLoader(parentLoader));
             final Class groovyClass;
             try {
                 groovyClass = loader.parseClass(new GroovyCodeSource(templateExpressions.toString(), "GStringTemplateScript" + counter.incrementAndGet() + ".groovy", "x"));
@@ -202,16 +201,14 @@ public class GStringTemplateEngine extends TemplateEngine {
             }
 
             try {
-                final GroovyObject script = (GroovyObject) groovyClass.newInstance();
+                final GroovyObject script = (GroovyObject) groovyClass.getDeclaredConstructor().newInstance();
 
                 this.template = (Closure) script.invokeMethod("getTemplate", null);
                 // GROOVY-6521: must set strategy to DELEGATE_FIRST, otherwise writing
                 // books = 'foo' in a template would store 'books' in the binding of the template script itself ("script")
                 // instead of storing it in the delegate, which is a Binding too
                 this.template.setResolveStrategy(Closure.DELEGATE_FIRST);
-            } catch (InstantiationException e) {
-                throw new ClassNotFoundException(e.getMessage());
-            } catch (IllegalAccessException e) {
+            } catch (InstantiationException | IllegalAccessException | NoSuchMethodException | InvocationTargetException e) {
                 throw new ClassNotFoundException(e.getMessage());
             }
         }

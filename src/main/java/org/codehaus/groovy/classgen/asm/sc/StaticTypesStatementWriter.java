@@ -59,8 +59,7 @@ import static org.objectweb.asm.Opcodes.LALOAD;
 import static org.objectweb.asm.Opcodes.SALOAD;
 
 /**
- * A class to write out the optimized statements
- * @author <a href="mailto:blackdrag@gmx.org">Jochen "blackdrag" Theodorou</a>
+ * A class to write out the optimized statements.
  */
 public class StaticTypesStatementWriter extends StatementWriter {
 
@@ -69,13 +68,10 @@ public class StaticTypesStatementWriter extends StatementWriter {
     private static final MethodCaller ENUMERATION_NEXT_METHOD = MethodCaller.newInterface(Enumeration.class, "nextElement");
     private static final MethodCaller ENUMERATION_HASMORE_METHOD = MethodCaller.newInterface(Enumeration.class, "hasMoreElements");
 
-    private final StaticTypesWriterController controller;
-
     public StaticTypesStatementWriter(StaticTypesWriterController controller) {
         super(controller);
-        this.controller = controller;
     }
-    
+
     @Override
     public void writeBlockStatement(BlockStatement statement) {
         controller.switchToFastPath();

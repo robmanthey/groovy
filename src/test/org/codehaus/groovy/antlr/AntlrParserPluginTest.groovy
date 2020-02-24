@@ -18,6 +18,7 @@
  */
 package org.codehaus.groovy.antlr
 
+import groovy.test.GroovyTestCase
 import org.codehaus.groovy.ast.ClassNode
 import org.codehaus.groovy.ast.InnerClassNode
 import org.codehaus.groovy.ast.MethodNode
@@ -75,7 +76,6 @@ class AntlrParserPluginTest extends GroovyTestCase {
         assert statement.lastLineNumber == 4
         assert statement.columnNumber == 21
         assert statement.lastColumnNumber == 34
-        assert statement.statementLabel == 'label'
+        assert statement.statementLabels[0] == 'label'
     }
-
 }

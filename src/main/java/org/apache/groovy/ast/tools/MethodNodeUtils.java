@@ -18,8 +18,13 @@
  */
 package org.apache.groovy.ast.tools;
 
+import org.codehaus.groovy.ast.ClassHelper;
 import org.codehaus.groovy.ast.MethodNode;
 import org.codehaus.groovy.ast.Parameter;
+import org.codehaus.groovy.ast.stmt.BlockStatement;
+import org.codehaus.groovy.ast.stmt.Statement;
+
+import static org.apache.groovy.util.BeanUtils.decapitalize;
 
 /**
  * Utility class for working with MethodNodes
@@ -65,5 +70,54 @@ public class MethodNodeUtils {
         return sb.toString();
     }
 
+    /**
+     * For a method node potentially representing a property, returns the name of the property.
+     *
+     * @param mNode a MethodNode
+     * @return the property name without the get/set/is prefix if a property or null
+     */
+    public static String getPropertyName(MethodNode mNode) {
+        String name = mNode.getName();
+        if (name.startsWith("set") || name.startsWith("get") || name.startsWith("is")) {
+            String pname = decapitalize(name.substring(name.startsWith("is") ? 2 : 3));
+            if (!pname.isEmpty()) {
+                if (name.startsWith("set")) {
+                    if (mNode.getParameters().length == 1) {
+                        return pname;
+                    }
+                } else if (mNode.getParameters().length == 0 && !ClassHelper.VOID_TYPE.equals(mNode.getReturnType())) {
+                    if (name.startsWith("get") || ClassHelper.boolean_TYPE.equals(mNode.getReturnType())) {
+                        return pname;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
     private MethodNodeUtils() { }
+
+    /**
+     * Gets the code for a method (or constructor) as a block.
+     * If no code is found, an empty block will be returned.
+     * If a single non-block statement is found, a block containing that statement will be returned.
+     * Otherwise the existing block statement will be returned.
+     * The original {@code node} is not modified.
+     *
+     * @param node the method (or constructor) node
+     * @return the found or created block statement
+     */
+    public static BlockStatement getCodeAsBlock(MethodNode node) {
+        Statement code = node.getCode();
+        BlockStatement block;
+        if (code == null) {
+            block = new BlockStatement();
+        } else if (!(code instanceof BlockStatement)) {
+            block = new BlockStatement();
+            block.addStatement(code);
+        } else {
+            block = (BlockStatement) code;
+        }
+        return block;
+    }
 }

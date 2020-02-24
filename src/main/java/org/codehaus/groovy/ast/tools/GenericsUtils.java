@@ -18,13 +18,9 @@
  */
 package org.codehaus.groovy.ast.tools;
 
-import antlr.RecognitionException;
-import antlr.TokenStreamException;
+import groovy.lang.Tuple2;
 import groovy.transform.stc.IncorrectTypeHintException;
 import org.codehaus.groovy.GroovyBugError;
-import org.codehaus.groovy.antlr.AntlrParserPlugin;
-import org.codehaus.groovy.antlr.parser.GroovyLexer;
-import org.codehaus.groovy.antlr.parser.GroovyRecognizer;
 import org.codehaus.groovy.ast.ASTNode;
 import org.codehaus.groovy.ast.ClassHelper;
 import org.codehaus.groovy.ast.ClassNode;
@@ -32,18 +28,19 @@ import org.codehaus.groovy.ast.GenericsType;
 import org.codehaus.groovy.ast.MethodNode;
 import org.codehaus.groovy.ast.ModuleNode;
 import org.codehaus.groovy.ast.Parameter;
+import org.codehaus.groovy.ast.expr.DeclarationExpression;
 import org.codehaus.groovy.ast.stmt.EmptyStatement;
+import org.codehaus.groovy.ast.stmt.ExpressionStatement;
 import org.codehaus.groovy.control.CompilationUnit;
+import org.codehaus.groovy.control.ParserPlugin;
 import org.codehaus.groovy.control.ResolveVisitor;
 import org.codehaus.groovy.control.SourceUnit;
 import org.codehaus.groovy.runtime.memoize.ConcurrentSoftCache;
 import org.codehaus.groovy.runtime.memoize.EvictableCache;
-import org.codehaus.groovy.syntax.ParserException;
-import org.codehaus.groovy.syntax.Reduction;
 
-import java.io.StringReader;
 import java.lang.ref.SoftReference;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -51,8 +48,12 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
+import java.util.function.Predicate;
 
+import static groovy.lang.Tuple.tuple;
+import static org.apache.groovy.util.SystemUtil.getSystemPropertySafe;
+import static org.codehaus.groovy.runtime.DefaultGroovyMethods.plus;
 import static org.codehaus.groovy.transform.stc.StaticTypeCheckingSupport.getCorrectedClassNode;
 import static org.codehaus.groovy.transform.stc.StaticTypeCheckingSupport.implementsInterfaceOrIsSubclassOf;
 
@@ -139,8 +140,8 @@ public class GenericsUtils {
         return gt;
     }
 
-    public static Map<String, GenericsType> extractPlaceholders(ClassNode cn) {
-        Map<String, GenericsType> ret = new HashMap<String, GenericsType>();
+    public static Map<GenericsType.GenericsTypeName, GenericsType> extractPlaceholders(ClassNode cn) {
+        Map<GenericsType.GenericsTypeName, GenericsType> ret = new HashMap<>();
         extractPlaceholders(cn, ret);
         return ret;
     }
@@ -152,7 +153,7 @@ public class GenericsUtils {
      * @param node the class node to check
      * @param map the generics type information collector
      */
-    public static void extractPlaceholders(ClassNode node, Map<String, GenericsType> map) {
+    public static void extractPlaceholders(ClassNode node, Map<GenericsType.GenericsTypeName, GenericsType> map) {
         if (node == null) return;
 
         if (node.isArray()) {
@@ -178,7 +179,7 @@ public class GenericsUtils {
         for (int i = 0; i < redirectGenericsTypes.length; i++) {
             GenericsType redirectType = redirectGenericsTypes[i];
             if (redirectType.isPlaceholder()) {
-                String name = redirectType.getName();
+                GenericsType.GenericsTypeName name = new GenericsType.GenericsTypeName(redirectType.getName());
                 if (!map.containsKey(name)) {
                     GenericsType value = parameterized[i];
                     map.put(name, value);
@@ -310,7 +311,7 @@ public class GenericsUtils {
         if (type.isArray()) {
             return makeClassSafeWithGenerics(type.getComponentType(), genericTypes).makeArray();
         }
-        GenericsType[] gtypes = GenericsType.EMPTY_ARRAY;
+        GenericsType[] gtypes = EMPTY_GENERICS_ARRAY;
         if (genericTypes != null) {
             gtypes = new GenericsType[genericTypes.length];
             System.arraycopy(genericTypes, 0, gtypes, 0, gtypes.length);
@@ -319,6 +320,7 @@ public class GenericsUtils {
     }
 
     public static MethodNode correctToGenericsSpec(Map<String, ClassNode> genericsSpec, MethodNode mn) {
+        if (mn.getGenericsTypes() != null) genericsSpec = addMethodGenerics(mn, genericsSpec);
         ClassNode correctedType = correctToGenericsSpecRecurse(genericsSpec, mn.getReturnType());
         Parameter[] origParameters = mn.getParameters();
         Parameter[] newParameters = new Parameter[origParameters.length];
@@ -354,42 +356,49 @@ public class GenericsUtils {
         }
         if (type.isGenericsPlaceHolder() && !exclusions.contains(type.getUnresolvedName())) {
             String name = type.getGenericsTypes()[0].getName();
+            exclusions = plus(exclusions, name); // GROOVY-7722
             type = genericsSpec.get(name);
-            if (type != null && type.isGenericsPlaceHolder() && type.getGenericsTypes() == null) {
-                ClassNode placeholder = ClassHelper.makeWithoutCaching(type.getUnresolvedName());
-                placeholder.setGenericsPlaceHolder(true);
-                type = makeClassSafeWithGenerics(type, new GenericsType(placeholder));
+            if (type != null && type.isGenericsPlaceHolder()) {
+                if (type.getGenericsTypes() == null) {
+                    ClassNode placeholder = ClassHelper.makeWithoutCaching(type.getUnresolvedName());
+                    placeholder.setGenericsPlaceHolder(true);
+                    return makeClassSafeWithGenerics(type, new GenericsType(placeholder));
+                } else if (!name.equals(type.getUnresolvedName())) {
+                    return correctToGenericsSpecRecurse(genericsSpec, type, exclusions);
+                }
             }
         }
         if (type == null) type = ClassHelper.OBJECT_TYPE;
         GenericsType[] oldgTypes = type.getGenericsTypes();
-        GenericsType[] newgTypes = GenericsType.EMPTY_ARRAY;
+        GenericsType[] newgTypes = EMPTY_GENERICS_ARRAY;
         if (oldgTypes != null) {
             newgTypes = new GenericsType[oldgTypes.length];
             for (int i = 0; i < newgTypes.length; i++) {
                 GenericsType oldgType = oldgTypes[i];
-                if (oldgType.isPlaceholder()) {
-                    if (genericsSpec.get(oldgType.getName()) != null) {
-                        newgTypes[i] = new GenericsType(genericsSpec.get(oldgType.getName()));
-                    } else {
-                        newgTypes[i] = new GenericsType(ClassHelper.OBJECT_TYPE);
-                    }
-                } else if (oldgType.isWildcard()) {
-                    ClassNode oldLower = oldgType.getLowerBound();
-                    ClassNode lower = oldLower != null ? correctToGenericsSpecRecurse(genericsSpec, oldLower, exclusions) : null;
+                if (oldgType.isWildcard()) {
                     ClassNode[] oldUpper = oldgType.getUpperBounds();
                     ClassNode[] upper = null;
                     if (oldUpper != null) {
+                        // correct "? extends T" or "? extends T & I"
                         upper = new ClassNode[oldUpper.length];
                         for (int j = 0; j < oldUpper.length; j++) {
                             upper[j] = correctToGenericsSpecRecurse(genericsSpec, oldUpper[j], exclusions);
                         }
                     }
+                    ClassNode oldLower = oldgType.getLowerBound();
+                    ClassNode lower = null;
+                    if (oldLower != null) {
+                        // correct "? super T"
+                        lower = correctToGenericsSpecRecurse(genericsSpec, oldLower, exclusions);
+                    }
                     GenericsType fixed = new GenericsType(oldgType.getType(), upper, lower);
-                    fixed.setName(oldgType.getName());
                     fixed.setWildcard(true);
                     newgTypes[i] = fixed;
+                } else if (oldgType.isPlaceholder()) {
+                    // correct "T"
+                    newgTypes[i] = new GenericsType(genericsSpec.getOrDefault(oldgType.getName(), ClassHelper.OBJECT_TYPE));
                 } else {
+                    // correct "List<T>", etc.
                     newgTypes[i] = new GenericsType(correctToGenericsSpecRecurse(genericsSpec, correctToGenericsSpec(genericsSpec, oldgType), exclusions));
                 }
             }
@@ -411,17 +420,20 @@ public class GenericsUtils {
         if (type.isArray()) {
             return correctToGenericsSpec(genericsSpec, type.getComponentType()).makeArray();
         }
-        if (type.isGenericsPlaceHolder()) {
+        if (type.isGenericsPlaceHolder() && type.getGenericsTypes() != null) {
             String name = type.getGenericsTypes()[0].getName();
             type = genericsSpec.get(name);
+            if (type != null && type.isGenericsPlaceHolder()
+                    && !name.equals(type.getUnresolvedName())) {
+                return correctToGenericsSpec(genericsSpec, type);
+            }
         }
         if (type == null) type = ClassHelper.OBJECT_TYPE;
         return type;
     }
 
-    @SuppressWarnings("unchecked")
     public static Map<String, ClassNode> createGenericsSpec(ClassNode current) {
-        return createGenericsSpec(current, Collections.EMPTY_MAP);
+        return createGenericsSpec(current, Collections.emptyMap());
     }
 
     public static Map<String, ClassNode> createGenericsSpec(ClassNode current, Map<String, ClassNode> oldSpec) {
@@ -453,15 +465,35 @@ public class GenericsUtils {
     }
 
     public static Map<String, ClassNode> addMethodGenerics(MethodNode current, Map<String, ClassNode> oldSpec) {
-        Map<String, ClassNode> ret = new HashMap<String, ClassNode>(oldSpec);
-        // ret starts with the original type specs, now add gts for the current method if any
-        GenericsType[] sgts = current.getGenericsTypes();
-        if (sgts != null) {
-            for (GenericsType sgt : sgts) {
-                ret.put(sgt.getName(), sgt.getType());
+        Map<String, ClassNode> newSpec = new HashMap<>(oldSpec);
+        GenericsType[] gts = current.getGenericsTypes();
+        if (gts != null) {
+            for (GenericsType gt : gts) {
+                String name = gt.getName();
+                ClassNode type = gt.getType();
+                if (gt.isPlaceholder()) {
+                    ClassNode redirect;
+                    if (gt.getUpperBounds() != null) {
+                        redirect = gt.getUpperBounds()[0];
+                    } else if (gt.getLowerBound() != null) {
+                        redirect = gt.getLowerBound();
+                    } else {
+                        redirect = ClassHelper.OBJECT_TYPE;
+                    }
+                    if (redirect.isGenericsPlaceHolder()) {
+                        // "T extends U" or "T super U"
+                        type = redirect;
+                    } else {
+                        // "T" or "T extends Thing" or "T super Thing"
+                        type = ClassHelper.makeWithoutCaching(name);
+                        type.setGenericsPlaceHolder(true);
+                        type.setRedirect(redirect);
+                    }
+                }
+                newSpec.put(name, type);
             }
         }
-        return ret;
+        return newSpec;
     }
 
     public static void extractSuperClassGenerics(ClassNode type, ClassNode target, Map<String, ClassNode> spec) {
@@ -487,7 +519,7 @@ public class GenericsUtils {
                 ClassNode corrected = getCorrectedClassNode(type, superClass, false);
                 extractSuperClassGenerics(corrected, target, spec);
             } else {
-                // if we reach here, we have an unhandled case 
+                // if we reach here, we have an unhandled case
                 throw new GroovyBugError("The type " + type + " seems not to normally extend " + target + ". Sorry, I cannot handle this.");
             }
         }
@@ -506,7 +538,7 @@ public class GenericsUtils {
     }
 
     private static void extractSuperClassGenerics(GenericsType[] usage, GenericsType[] declaration, Map<String, ClassNode> spec) {
-        // if declaration does not provide generics, there is no connection to make 
+        // if declaration does not provide generics, there is no connection to make
         if (usage == null || declaration == null || declaration.length == 0) return;
         if (usage.length != declaration.length) return;
 
@@ -550,42 +582,24 @@ public class GenericsUtils {
         }
     }
 
-    public static ClassNode[] parseClassNodesFromString(
-            final String option,
-            final SourceUnit sourceUnit,
-            final CompilationUnit compilationUnit,
-            final MethodNode mn,
-            final ASTNode usage) {
-        GroovyLexer lexer = new GroovyLexer(new StringReader("DummyNode<" + option + ">"));
-        final GroovyRecognizer rn = GroovyRecognizer.make(lexer);
+    public static ClassNode[] parseClassNodesFromString(final String option, final SourceUnit sourceUnit, final CompilationUnit compilationUnit, final MethodNode mn, final ASTNode usage) {
         try {
-            rn.classOrInterfaceType(true);
-            final AtomicReference<ClassNode> ref = new AtomicReference<ClassNode>();
-            AntlrParserPlugin plugin = new AntlrParserPlugin() {
-                @Override
-                public ModuleNode buildAST(final SourceUnit sourceUnit, final ClassLoader classLoader, final Reduction cst) throws ParserException {
-                    ref.set(makeTypeWithArguments(rn.getAST()));
-                    return null;
-                }
-            };
-            plugin.buildAST(null, null, null);
-            ClassNode parsedNode = ref.get();
+            ModuleNode moduleNode = ParserPlugin.buildAST("Dummy<" + option + "> dummy;", compilationUnit.getConfiguration(), compilationUnit.getClassLoader(), null);
+            DeclarationExpression dummyDeclaration = (DeclarationExpression) ((ExpressionStatement) moduleNode.getStatementBlock().getStatements().get(0)).getExpression();
+
             // the returned node is DummyNode<Param1, Param2, Param3, ...)
-            GenericsType[] parsedNodeGenericsTypes = parsedNode.getGenericsTypes();
-            if (parsedNodeGenericsTypes == null) {
+            ClassNode dummyNode = dummyDeclaration.getLeftExpression().getType();
+            GenericsType[] dummyNodeGenericsTypes = dummyNode.getGenericsTypes();
+            if (dummyNodeGenericsTypes == null) {
                 return null;
             }
-            ClassNode[] signature = new ClassNode[parsedNodeGenericsTypes.length];
-            for (int i = 0; i < parsedNodeGenericsTypes.length; i++) {
-                final GenericsType genericsType = parsedNodeGenericsTypes[i];
+            ClassNode[] signature = new ClassNode[dummyNodeGenericsTypes.length];
+            for (int i = 0, n = dummyNodeGenericsTypes.length; i < n; i += 1) {
+                final GenericsType genericsType = dummyNodeGenericsTypes[i];
                 signature[i] = resolveClassNode(sourceUnit, compilationUnit, mn, usage, genericsType.getType());
             }
             return signature;
-        } catch (RecognitionException e) {
-            sourceUnit.addError(new IncorrectTypeHintException(mn, e, usage.getLineNumber(), usage.getColumnNumber()));
-        } catch (TokenStreamException e) {
-            sourceUnit.addError(new IncorrectTypeHintException(mn, e, usage.getLineNumber(), usage.getColumnNumber()));
-        } catch (ParserException e) {
+        } catch (Exception | LinkageError e) {
             sourceUnit.addError(new IncorrectTypeHintException(mn, e, usage.getLineNumber(), usage.getColumnNumber()));
         }
         return null;
@@ -616,8 +630,9 @@ public class GenericsUtils {
     }
 
     /**
-     * transforms generics types from an old context to a new context using the given spec. This method assumes
-     * all generics types will be placeholders. WARNING: The resulting generics types may or may not be placeholders
+     * Transforms generics types from an old context to a new context using the
+     * given spec. This method assumes all generics types will be placeholders.
+     * WARNING: The resulting generics types may or may not be placeholders
      * after the transformation.
      *
      * @param genericsSpec    the generics context information spec
@@ -634,19 +649,14 @@ public class GenericsUtils {
                 throw new GroovyBugError("Given generics type " + old + " must be a placeholder!");
             ClassNode fromSpec = genericsSpec.get(old.getName());
             if (fromSpec != null) {
-                if (fromSpec.isGenericsPlaceHolder()) {
-                    ClassNode[] upper = new ClassNode[]{fromSpec.redirect()};
-                    newTypes[i] = new GenericsType(fromSpec, upper, null);
-                } else {
-                    newTypes[i] = new GenericsType(fromSpec);
-                }
+                newTypes[i] = fromSpec.asGenericsType();
             } else {
                 ClassNode[] upper = old.getUpperBounds();
                 ClassNode[] newUpper = upper;
                 if (upper != null && upper.length > 0) {
                     ClassNode[] upperCorrected = new ClassNode[upper.length];
-                    for (int j = 0; j < upper.length; j++) {
-                        upperCorrected[i] = correctToGenericsSpecRecurse(genericsSpec, upper[j]);
+                    for (ClassNode classNode : upper) {
+                        upperCorrected[i] = correctToGenericsSpecRecurse(genericsSpec, classNode);
                     }
                     upper = upperCorrected;
                 }
@@ -665,25 +675,32 @@ public class GenericsUtils {
         return newTypes;
     }
 
+    private static final boolean PARAMETERIZED_TYPE_CACHE_ENABLED = Boolean.parseBoolean(getSystemPropertySafe("groovy.enable.parameterized.type.cache", "true"));
+
     /**
      * Try to get the parameterized type from the cache.
-     * If no cached item found, cache and return the result of {@link #findParameterizedType(ClassNode, ClassNode)}
+     * If no cached item found, cache and return the result of {@link #findParameterizedType(ClassNode, ClassNode, boolean)}
      */
-    public static ClassNode findParameterizedTypeFromCache(final ClassNode genericsClass, final ClassNode actualType) {
-        SoftReference<ClassNode> sr = PARAMETERIZED_TYPE_CACHE.getAndPut(new ParameterizedTypeCacheKey(genericsClass, actualType), key -> new SoftReference<>(findParameterizedType(key.getGenericsClass(), key.getActualType())));
+    public static ClassNode findParameterizedTypeFromCache(final ClassNode genericsClass, final ClassNode actualType, boolean tryToFindExactType) {
+        if (!PARAMETERIZED_TYPE_CACHE_ENABLED) {
+            return findParameterizedType(genericsClass, actualType, tryToFindExactType);
+        }
+
+        SoftReference<ClassNode> sr = PARAMETERIZED_TYPE_CACHE.getAndPut(new ParameterizedTypeCacheKey(genericsClass, actualType), key -> new SoftReference<>(findParameterizedType(key.getGenericsClass(), key.getActualType(), tryToFindExactType)));
 
         return null == sr ? null : sr.get();
     }
 
     /**
      * Get the parameterized type by search the whole class hierarchy according to generics class and actual receiver.
-     * {@link #findParameterizedTypeFromCache(ClassNode, ClassNode)} is strongly recommended for better performance.
+     * {@link #findParameterizedTypeFromCache(ClassNode, ClassNode, boolean)} is strongly recommended for better performance.
      *
      * @param genericsClass the generics class
      * @param actualType the actual type
+     * @param tryToFindExactType whether to try to find exact type
      * @return the parameterized type
      */
-    public static ClassNode findParameterizedType(ClassNode genericsClass, ClassNode actualType) {
+    public static ClassNode findParameterizedType(ClassNode genericsClass, ClassNode actualType, boolean tryToFindExactType) {
         ClassNode parameterizedType = null;
 
         if (null == genericsClass.getGenericsTypes()) {
@@ -695,18 +712,30 @@ public class GenericsUtils {
         List<ClassNode> classNodeList = new LinkedList<>(getAllSuperClassesAndInterfaces(actualType));
         classNodeList.add(0, actualType);
 
+        LinkedList<ClassNode> parameterizedTypeCandidateList = new LinkedList<>();
+
         for (ClassNode cn : classNodeList) {
             if (cn == genericsClass) {
                 continue;
             }
 
-            if (!genericsClass.equals(cn.redirect())) {
+            if (tryToFindExactType && null != cn.getGenericsTypes() && hasNonPlaceHolders(cn)) {
+                parameterizedTypeCandidateList.add(cn);
+            }
+
+            if (!(genericsClass.equals(cn.redirect()))) {
                 continue;
             }
 
             if (isGenericsTypeArraysLengthEqual(declaringGenericsTypes, cn.getGenericsTypes())) {
                 parameterizedType = cn;
                 break;
+            }
+        }
+
+        if (null == parameterizedType) {
+            if (!parameterizedTypeCandidateList.isEmpty()) {
+                parameterizedType = parameterizedTypeCandidateList.getLast();
             }
         }
 
@@ -743,6 +772,14 @@ public class GenericsUtils {
     private static final EvictableCache<ParameterizedTypeCacheKey, SoftReference<ClassNode>> PARAMETERIZED_TYPE_CACHE = new ConcurrentSoftCache<>(64);
 
     /**
+     * Clear the parameterized type cache
+     * It is useful to IDE as the type being compiled are continuously being edited/altered, see GROOVY-8675
+     */
+    public static void clearParameterizedTypeCache() {
+        PARAMETERIZED_TYPE_CACHE.clearAll();
+    }
+
+    /**
      * map declaring generics type to actual generics type, e.g. GROOVY-7204:
      * declaring generics types:      T,      S extends Serializable
      * actual generics types   : String,      Long
@@ -756,40 +793,198 @@ public class GenericsUtils {
      * so we need actual types:  T: String, S: Long
      */
     public static Map<GenericsType, GenericsType> makeDeclaringAndActualGenericsTypeMap(ClassNode declaringClass, ClassNode actualReceiver) {
-        ClassNode parameterizedType = findParameterizedTypeFromCache(declaringClass, actualReceiver);
+        return doMakeDeclaringAndActualGenericsTypeMap(declaringClass, actualReceiver, false).getV1();
+    }
+
+    /**
+     * The method is similar with {@link GenericsUtils#makeDeclaringAndActualGenericsTypeMap(ClassNode, ClassNode)},
+     * The main difference is that the method will try to map all placeholders found to the relevant exact types,
+     * but the other will not try even if the parameterized type has placeholders
+     *
+     * @param declaringClass the generics class node declaring the generics types
+     * @param actualReceiver the sub-class class node
+     * @return the placeholder-to-actualtype mapping
+     * @since 3.0.0
+     */
+    public static Map<GenericsType, GenericsType> makeDeclaringAndActualGenericsTypeMapOfExactType(ClassNode declaringClass, ClassNode actualReceiver) {
+        List<ClassNode> parameterizedTypeList = new LinkedList<>();
+
+        Map<GenericsType, GenericsType> result = makeDeclaringAndActualGenericsTypeMapOfExactType(declaringClass, actualReceiver, parameterizedTypeList);
+
+        return connectGenericsTypes(result);
+    }
+
+    private static Map<GenericsType, GenericsType> makeDeclaringAndActualGenericsTypeMapOfExactType(ClassNode declaringClass, ClassNode actualReceiver, List<ClassNode> parameterizedTypeList) {
+        Tuple2<Map<GenericsType, GenericsType>, ClassNode> resultAndParameterizedTypeTuple = doMakeDeclaringAndActualGenericsTypeMap(declaringClass, actualReceiver, true);
+        ClassNode parameterizedType = resultAndParameterizedTypeTuple.getV2();
+        Map<GenericsType, GenericsType> result = resultAndParameterizedTypeTuple.getV1();
+
+        if (hasPlaceHolders(parameterizedType) && !parameterizedTypeList.contains(parameterizedType)) {
+            parameterizedTypeList.add(parameterizedType);
+            result.putAll(makeDeclaringAndActualGenericsTypeMapOfExactType(parameterizedType, actualReceiver, parameterizedTypeList));
+        }
+
+        return connectGenericsTypes(result);
+    }
+
+    private static Tuple2<Map<GenericsType, GenericsType>, ClassNode> doMakeDeclaringAndActualGenericsTypeMap(ClassNode declaringClass, ClassNode actualReceiver, boolean tryToFindExactType) {
+        ClassNode parameterizedType = findParameterizedTypeFromCache(declaringClass, actualReceiver, tryToFindExactType);
 
         if (null == parameterizedType) {
+            return tuple(Collections.emptyMap(), parameterizedType);
+        }
+
+        Map<GenericsType, GenericsType> result = new LinkedHashMap<>();
+
+        result.putAll(makePlaceholderAndParameterizedTypeMap(declaringClass));
+        result.putAll(makePlaceholderAndParameterizedTypeMap(parameterizedType));
+
+        result = connectGenericsTypes(result);
+
+        return tuple(result, parameterizedType);
+    }
+
+    private static Map<GenericsType, GenericsType> makePlaceholderAndParameterizedTypeMap(ClassNode declaringClass) {
+        if (null == declaringClass) {
             return Collections.emptyMap();
         }
 
-        GenericsType[] declaringGenericsTypes = declaringClass.getGenericsTypes();
-        GenericsType[] actualGenericsTypes = parameterizedType.getGenericsTypes();
-
         Map<GenericsType, GenericsType> result = new LinkedHashMap<>();
-        for (int i = 0, n = declaringGenericsTypes.length; i < n; i++) {
-            result.put(declaringGenericsTypes[i], actualGenericsTypes[i]);
+
+        ClassNode redirectDeclaringClass = declaringClass.redirect();
+        GenericsType[] declaringGenericsTypes = declaringClass.getGenericsTypes();
+        GenericsType[] redirectDeclaringGenericsTypes = redirectDeclaringClass.getGenericsTypes();
+
+        if (null != declaringGenericsTypes && null != redirectDeclaringGenericsTypes) {
+            for (int i = 0, n = declaringGenericsTypes.length; i < n; i++) {
+                result.put(redirectDeclaringGenericsTypes[i], declaringGenericsTypes[i]);
+            }
+        }
+
+        return result;
+    }
+
+    private static Map<GenericsType, GenericsType> connectGenericsTypes(Map<GenericsType, GenericsType> genericsTypeMap) {
+        Map<GenericsType, GenericsType> result = new LinkedHashMap<>();
+
+        outer:
+        for (Map.Entry<GenericsType, GenericsType> entry : genericsTypeMap.entrySet()) {
+            GenericsType key = entry.getKey();
+            GenericsType value = entry.getValue();
+
+            if (value.isPlaceholder()) {
+                for (Map.Entry<GenericsType, GenericsType> genericsTypeMapEntry : genericsTypeMap.entrySet()) {
+                    GenericsType genericsTypeMapEntryValue = genericsTypeMapEntry.getValue();
+                    if (!genericsTypeMapEntryValue.isPlaceholder() && (genericsTypeMapEntry.getKey().getName().equals(value.getName()))) {
+                        result.put(key, genericsTypeMapEntryValue); // connected to actual type
+                        continue outer;
+                    }
+                }
+            }
+
+            result.put(key, value);
         }
 
         return result;
     }
 
     /**
-     * Get the actual type according to the placeholder name
+     * Check whether the ClassNode has non generics placeholders, aka not placeholder
      *
-     * @param placeholderName the placeholder name, e.g. T, E
-     * @param genericsPlaceholderAndTypeMap the result of {@link #makeDeclaringAndActualGenericsTypeMap(ClassNode, ClassNode}
-     * @return the actual type
+     * @param parameterizedType the class node
+     * @return the result
+     * @since 3.0.0
      */
-    public static ClassNode findActualTypeByGenericsPlaceholderName(String placeholderName, Map<GenericsType, GenericsType> genericsPlaceholderAndTypeMap) {
-        for (Map.Entry<GenericsType, GenericsType> entry : genericsPlaceholderAndTypeMap.entrySet()) {
-            GenericsType declaringGenericsType = entry.getKey();
+    public static boolean hasNonPlaceHolders(ClassNode parameterizedType) {
+        return checkPlaceHolders(parameterizedType, genericsType -> !genericsType.isPlaceholder());
+    }
 
-            if (placeholderName.equals(declaringGenericsType.getName())) {
-                return entry.getValue().getType().redirect();
+    /**
+     * Check whether the ClassNode has generics placeholders
+     * @param parameterizedType the class node
+     * @return the result
+     * @since 3.0.0
+     */
+    public static boolean hasPlaceHolders(ClassNode parameterizedType) {
+        return checkPlaceHolders(parameterizedType, GenericsType::isPlaceholder);
+    }
+
+    private static boolean checkPlaceHolders(ClassNode parameterizedType, Predicate<GenericsType> p) {
+        if (null == parameterizedType) return false;
+
+        GenericsType[] genericsTypes = parameterizedType.getGenericsTypes();
+
+        if (null == genericsTypes) return false;
+
+        for (GenericsType genericsType : genericsTypes) {
+            if (p.test(genericsType)) {
+                return true;
             }
         }
 
-        return null;
+        return false;
+    }
+
+    /**
+     * Gets the parameter and return types of the abstract method of SAM.
+     *
+     * If the abstract method is not parameterized, we will get generics placeholders, e.g. T, U
+     * For example, the abstract method of {@link java.util.function.Function} is
+     * <pre>
+     *      R apply(T t);
+     * </pre>
+     *
+     * We parameterize the above interface as {@code Function<String, Integer>}, then the abstract method will be
+     * <pre>
+     *      Integer apply(String t);
+     * </pre>
+     *
+     * When we call {@code parameterizeSAM} on the ClassNode {@code Function<String, Integer>},
+     * we can get parameter types and return type of the above abstract method,
+     * i.e. ClassNode {@code ClassHelper.STRING_TYPE} and {@code ClassHelper.Integer_TYPE}
+     *
+     * @param samType the class node which contains only one abstract method
+     *
+     * @since 3.0.0
+     */
+    public static Tuple2<ClassNode[], ClassNode> parameterizeSAM(final ClassNode samType) {
+        MethodNode abstractMethod = ClassHelper.findSAM(samType);
+
+        Map<GenericsType, GenericsType> generics = makeDeclaringAndActualGenericsTypeMapOfExactType(abstractMethod.getDeclaringClass(), samType);
+        Function<ClassNode, ClassNode> resolver = t -> {
+            if (t.isGenericsPlaceHolder()) {
+                return findActualTypeByGenericsPlaceholderName(t.getUnresolvedName(), generics);
+            }
+            return t;
+        };
+
+        ClassNode[] parameterTypes = Arrays.stream(abstractMethod.getParameters()).map(Parameter::getType).map(resolver).toArray(ClassNode[]::new);
+        ClassNode returnType = resolver.apply(abstractMethod.getReturnType());
+        return tuple(parameterTypes, returnType);
+    }
+
+    /**
+     * Gets the actual type according to the placeholder name.
+     *
+     * @param placeholderName the placeholder name (i.e. "T", "E", etc.)
+     * @param genericsPlaceholderAndTypeMap the result of {@link #makeDeclaringAndActualGenericsTypeMap(ClassNode, ClassNode)}
+     */
+    public static ClassNode findActualTypeByGenericsPlaceholderName(final String placeholderName, final Map<GenericsType, GenericsType> genericsPlaceholderAndTypeMap) {
+        Function<GenericsType, ClassNode> resolver = gt -> {
+            if (gt.isWildcard()) {
+                if (gt.getLowerBound() != null) {
+                    return gt.getLowerBound();
+                }
+                if (gt.getUpperBounds() != null) {
+                    return gt.getUpperBounds()[0];
+                }
+            }
+            return gt.getType();
+        };
+
+        return genericsPlaceholderAndTypeMap.entrySet().stream()
+                .filter(e -> e.getKey().getName().equals(placeholderName))
+                .map(Map.Entry::getValue).map(resolver).findFirst().orElse(null);
     }
 
     private static class ParameterizedTypeCacheKey {
@@ -805,6 +1000,7 @@ public class GenericsUtils {
             return genericsClass;
         }
 
+        @SuppressWarnings("unused")
         public void setGenericsClass(ClassNode genericsClass) {
             this.genericsClass = genericsClass;
         }
@@ -813,6 +1009,7 @@ public class GenericsUtils {
             return actualType;
         }
 
+        @SuppressWarnings("unused")
         public void setActualType(ClassNode actualType) {
             this.actualType = actualType;
         }

@@ -19,6 +19,7 @@
 package org.codehaus.groovy.transform.trait;
 
 import groovy.transform.CompileStatic;
+import org.codehaus.groovy.ast.ASTNode;
 import org.codehaus.groovy.ast.AnnotationNode;
 import org.codehaus.groovy.ast.ClassHelper;
 import org.codehaus.groovy.ast.ClassNode;
@@ -58,17 +59,15 @@ import org.codehaus.groovy.transform.ASTTransformationCollectorCodeVisitor;
 import org.codehaus.groovy.transform.sc.StaticCompileTransformation;
 import org.objectweb.asm.Opcodes;
 
-import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.Iterator;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.codehaus.groovy.ast.tools.GeneralUtils.args;
 import static org.codehaus.groovy.ast.tools.GeneralUtils.assignX;
@@ -82,7 +81,6 @@ import static org.codehaus.groovy.ast.tools.GenericsUtils.correctToGenericsSpecR
  * This class contains a static utility method {@link #doExtendTraits(org.codehaus.groovy.ast.ClassNode, org.codehaus.groovy.control.SourceUnit, org.codehaus.groovy.control.CompilationUnit)}
  * aimed at generating code for a classnode implementing a trait.
  *
- * @author Cédric Champeau
  * @since 2.3.0
  */
 public abstract class TraitComposer {
@@ -105,10 +103,10 @@ public abstract class TraitComposer {
             return;
         }
         if (!cNode.getNameWithoutPackage().endsWith(Traits.TRAIT_HELPER)) {
-            List<ClassNode> traits = findTraits(cNode);
+            List<ClassNode> traits = Traits.findTraits(cNode);
             for (ClassNode trait : traits) {
                 TraitHelpersTuple helpers = Traits.findHelpers(trait);
-                applyTrait(trait, cNode, helpers);
+                applyTrait(trait, cNode, helpers, unit);
                 superCallTransformer.visitClass(cNode);
                 if (unit!=null) {
                     ASTTransformationCollectorCodeVisitor collector = new ASTTransformationCollectorCodeVisitor(unit, cu.getTransformLoader());
@@ -116,18 +114,6 @@ public abstract class TraitComposer {
                 }
             }
         }
-    }
-
-    private static List<ClassNode> findTraits(ClassNode cNode) {
-        LinkedHashSet<ClassNode> interfaces = new LinkedHashSet<ClassNode>();
-        Traits.collectAllInterfacesReverseOrder(cNode, interfaces);
-        List<ClassNode> traits = new LinkedList<ClassNode>();
-        for (ClassNode candidate : interfaces) {
-            if (Traits.isAnnotatedWithTrait(candidate)) {
-                traits.add(candidate);
-            }
-        }
-        return traits;
     }
 
     private static void checkTraitAllowed(final ClassNode bottomTrait, final SourceUnit unit) {
@@ -138,50 +124,42 @@ public abstract class TraitComposer {
         }
     }
 
-    private static void applyTrait(final ClassNode trait, final ClassNode cNode, final TraitHelpersTuple helpers) {
+    private static void applyTrait(final ClassNode trait, final ClassNode cNode, final TraitHelpersTuple helpers, SourceUnit unit) {
         ClassNode helperClassNode = helpers.getHelper();
         ClassNode fieldHelperClassNode = helpers.getFieldHelper();
-        Map<String,ClassNode> genericsSpec = GenericsUtils.createGenericsSpec(cNode);
-        genericsSpec = GenericsUtils.createGenericsSpec(trait, genericsSpec);
+        ClassNode staticFieldHelperClassNode = helpers.getStaticFieldHelper();
+        Map<String, ClassNode> genericsSpec = GenericsUtils.createGenericsSpec(trait, GenericsUtils.createGenericsSpec(cNode));
 
         for (MethodNode methodNode : helperClassNode.getAllDeclaredMethods()) {
             String name = methodNode.getName();
             Parameter[] helperMethodParams = methodNode.getParameters();
-            boolean isAbstract = methodNode.isAbstract();
-            if (!isAbstract && helperMethodParams.length > 0 && ((methodNode.getModifiers() & Opcodes.ACC_STATIC) == Opcodes.ACC_STATIC) && (!name.contains("$") || (methodNode.getModifiers() & Opcodes.ACC_SYNTHETIC) == 0)) {
+            int nParams = helperMethodParams.length;
+            if (nParams > 0 && !methodNode.isAbstract() && ((methodNode.getModifiers() & Opcodes.ACC_STATIC) != 0)
+                    && (!name.contains("$") || (methodNode.getModifiers() & Opcodes.ACC_SYNTHETIC) == 0)) {
                 ArgumentListExpression argList = new ArgumentListExpression();
                 argList.addExpression(new VariableExpression("this"));
-                Parameter[] origParams = new Parameter[helperMethodParams.length - 1];
-                Parameter[] params = new Parameter[helperMethodParams.length - 1];
+                Parameter[] origParams = new Parameter[nParams - 1];
+                Parameter[] params = new Parameter[nParams - 1];
                 System.arraycopy(methodNode.getParameters(), 1, params, 0, params.length);
-                Map<String,ClassNode> methodGenericsSpec = new LinkedHashMap<String, ClassNode>(genericsSpec);
                 MethodNode originalMethod = trait.getMethod(name, params);
-                // Original method may be null for the case of private or static methods
-                if (originalMethod!=null) {
-                    methodGenericsSpec = GenericsUtils.addMethodGenerics(originalMethod, methodGenericsSpec);
-                }
-                for (int i = 1; i < helperMethodParams.length; i++) {
+                Map<String, ClassNode> methodGenericsSpec = Optional.ofNullable(originalMethod)
+                    .map(m -> GenericsUtils.addMethodGenerics(m, genericsSpec)).orElse(genericsSpec);
+                for (int i = 1; i < nParams; i += 1) {
                     Parameter parameter = helperMethodParams[i];
                     ClassNode originType = parameter.getOriginType();
                     ClassNode fixedType = correctToGenericsSpecRecurse(methodGenericsSpec, originType);
-                    Parameter newParam = new Parameter(fixedType, "arg" + i);
-                    List<AnnotationNode> copied = new LinkedList<AnnotationNode>();
-                    List<AnnotationNode> notCopied = new LinkedList<AnnotationNode>();
+                    Parameter newParam = new Parameter(fixedType, parameter.getName());
+                    List<AnnotationNode> copied = new LinkedList<>();
+                    List<AnnotationNode> notCopied = new LinkedList<>();
                     GeneralUtils.copyAnnotatedNodeAnnotations(parameter, copied, notCopied);
                     newParam.addAnnotations(copied);
                     params[i - 1] = newParam;
-                    origParams[i-1] = parameter;
-                    argList.addExpression(new VariableExpression(params[i - 1]));
+                    origParams[i - 1] = parameter;
+                    argList.addExpression(new VariableExpression(newParam));
                 }
-                createForwarderMethod(trait, cNode, methodNode, originalMethod, helperClassNode, methodGenericsSpec, helperMethodParams, origParams, params, argList);
+                createForwarderMethod(trait, cNode, methodNode, originalMethod, helperClassNode, methodGenericsSpec, helperMethodParams, origParams, params, argList, unit);
             }
         }
-        cNode.addObjectInitializerStatements(new ExpressionStatement(
-                new MethodCallExpression(
-                        new ClassExpression(helperClassNode),
-                        Traits.INIT_METHOD,
-                        new ArgumentListExpression(new VariableExpression("this")))
-        ));
         MethodCallExpression staticInitCall = new MethodCallExpression(
                 new ClassExpression(helperClassNode),
                 Traits.STATIC_INIT_METHOD,
@@ -191,14 +169,14 @@ public abstract class TraitComposer {
                 new Parameter[] {new Parameter(ClassHelper.CLASS_Type,"clazz")}, ClassNode.EMPTY_ARRAY, EmptyStatement.INSTANCE);
         staticInitMethod.setDeclaringClass(helperClassNode);
         staticInitCall.setMethodTarget(staticInitMethod);
-        cNode.addStaticInitializerStatements(Collections.<Statement>singletonList(new ExpressionStatement(
+        cNode.addStaticInitializerStatements(Collections.singletonList(new ExpressionStatement(
                 staticInitCall
         )), false);
         if (fieldHelperClassNode != null && !cNode.declaresInterface(fieldHelperClassNode)) {
             // we should implement the field helper interface too
             cNode.addInterface(fieldHelperClassNode);
             // implementation of methods
-            List<MethodNode> declaredMethods = new LinkedList<MethodNode>();
+            List<MethodNode> declaredMethods = new LinkedList<>();
             for (MethodNode declaredMethod : fieldHelperClassNode.getAllDeclaredMethods()) {
                 if (declaredMethod.getName().endsWith(Traits.DIRECT_GETTER_SUFFIX)) {
                     declaredMethods.add(0, declaredMethod);
@@ -206,6 +184,17 @@ public abstract class TraitComposer {
                     declaredMethods.add(declaredMethod);
                 }
             }
+
+            if (staticFieldHelperClassNode != null) {
+                for (MethodNode declaredMethod : staticFieldHelperClassNode.getAllDeclaredMethods()) {
+                    if (declaredMethod.getName().endsWith(Traits.DIRECT_GETTER_SUFFIX)) {
+                        declaredMethods.add(0, declaredMethod);
+                    } else {
+                        declaredMethods.add(declaredMethod);
+                    }
+                }
+            }
+
             for (MethodNode methodNode : declaredMethods) {
                 String fieldName = methodNode.getName();
                 if (fieldName.endsWith(Traits.DIRECT_GETTER_SUFFIX) || fieldName.endsWith(Traits.DIRECT_SETTER_SUFFIX)) {
@@ -234,17 +223,17 @@ public abstract class TraitComposer {
                     if (helperField == null) {
                         // look for possible legacy fields (trait compiled pre 2.4.8)
                         helperField = fieldHelperClassNode.getField(Traits.FIELD_PREFIX + Traits.PUBLIC_FIELD_PREFIX + fieldName);
-                        if (helperField==null) {
+                        if (helperField == null) {
                             publicField = false;
                             helperField = fieldHelperClassNode.getField(Traits.FIELD_PREFIX + Traits.PRIVATE_FIELD_PREFIX + fieldName);
                         }
-                        if (helperField==null) {
+                        if (helperField == null) {
                             publicField = true;
                             // try to find a static one
-                            helperField = fieldHelperClassNode.getField(Traits.STATIC_FIELD_PREFIX+Traits.PUBLIC_FIELD_PREFIX+fieldName);
-                            if (helperField==null) {
+                            helperField = fieldHelperClassNode.getField(Traits.STATIC_FIELD_PREFIX+Traits.PUBLIC_FIELD_PREFIX + fieldName);
+                            if (helperField == null) {
                                 publicField = false;
-                                helperField = fieldHelperClassNode.getField(Traits.STATIC_FIELD_PREFIX+Traits.PRIVATE_FIELD_PREFIX +fieldName);
+                                helperField = fieldHelperClassNode.getField(Traits.STATIC_FIELD_PREFIX+Traits.PRIVATE_FIELD_PREFIX + fieldName);
                             }
                             fieldMods = fieldMods | Opcodes.ACC_STATIC;
                             isStatic = Opcodes.ACC_STATIC;
@@ -254,8 +243,8 @@ public abstract class TraitComposer {
                     if (getter) {
                         // add field
                         if (helperField!=null) {
-                            List<AnnotationNode> copied = new LinkedList<AnnotationNode>();
-                            List<AnnotationNode> notCopied = new LinkedList<AnnotationNode>();
+                            List<AnnotationNode> copied = new LinkedList<>();
+                            List<AnnotationNode> notCopied = new LinkedList<>();
                             GeneralUtils.copyAnnotatedNodeAnnotations(helperField, copied, notCopied);
                             FieldNode fieldNode = cNode.addField(fieldName, fieldMods, returnType, null);
                             fieldNode.addAnnotations(copied);
@@ -263,12 +252,16 @@ public abstract class TraitComposer {
                             // so instead set within (static) initializer
                             if (fieldNode.isFinal()) {
                                 String baseName = fieldNode.isStatic() ? Traits.STATIC_INIT_METHOD : Traits.INIT_METHOD;
-                                Expression mce = callX(helperClassNode, baseName + fieldNode.getName(), args(varX("this")));
-                                Statement stmt = stmt(assignX(varX(fieldNode.getName(), fieldNode.getType()), mce));
-                                if (isStatic == 0) {
-                                    cNode.addObjectInitializerStatements(stmt);
-                                } else {
-                                    cNode.addStaticInitializerStatements(Collections.<Statement>singletonList(stmt), false);
+                                StaticMethodCallExpression mce = callX(helperClassNode, baseName + fieldNode.getName(), args(varX("this")));
+                                if (helperClassNode.hasPossibleStaticMethod(mce.getMethod(), mce.getArguments())) {
+                                    Statement stmt = stmt(assignX(varX(fieldNode.getName(), fieldNode.getType()), mce));
+                                    if (isStatic == 0) {
+                                        cNode.addObjectInitializerStatements(stmt);
+                                    } else {
+                                        List<Statement> staticStatements = new ArrayList<Statement>();
+                                        staticStatements.add(stmt);
+                                        cNode.addStaticInitializerStatements(staticStatements, true);
+                                    }
                                 }
                             }
                         }
@@ -310,6 +303,12 @@ public abstract class TraitComposer {
                 }
             }
         }
+        cNode.addObjectInitializerStatements(new ExpressionStatement(
+                new MethodCallExpression(
+                        new ClassExpression(helperClassNode),
+                        Traits.INIT_METHOD,
+                        new ArgumentListExpression(new VariableExpression("this")))
+        ));
     }
 
     private static void createForwarderMethod(
@@ -318,11 +317,11 @@ public abstract class TraitComposer {
             MethodNode helperMethod,
             MethodNode originalMethod,
             ClassNode helperClassNode,
-            Map<String,ClassNode> genericsSpec,
+            Map<String, ClassNode> genericsSpec,
             Parameter[] helperMethodParams,
             Parameter[] traitMethodParams,
             Parameter[] forwarderParams,
-            ArgumentListExpression helperMethodArgList) {
+            ArgumentListExpression helperMethodArgList, SourceUnit unit) {
         MethodCallExpression mce = new MethodCallExpression(
                 new ClassExpression(helperClassNode),
                 helperMethod.getName(),
@@ -330,33 +329,32 @@ public abstract class TraitComposer {
         );
         mce.setImplicitThis(false);
 
-        genericsSpec = GenericsUtils.addMethodGenerics(helperMethod,genericsSpec);
+        genericsSpec = GenericsUtils.addMethodGenerics(helperMethod, genericsSpec);
 
         ClassNode[] exceptionNodes = correctToGenericsSpecRecurse(genericsSpec, copyExceptions(helperMethod.getExceptions()));
         ClassNode fixedReturnType = correctToGenericsSpecRecurse(genericsSpec, helperMethod.getReturnType());
         boolean noCastRequired = genericsSpec.isEmpty() || fixedReturnType.getName().equals(ClassHelper.VOID_TYPE.getName());
         Expression forwardExpression = noCastRequired ? mce : new CastExpression(fixedReturnType,mce);
-        int access = helperMethod.getModifiers();
         // we could rely on the first parameter name ($static$self) but that information is not
         // guaranteed to be always present
         boolean isHelperForStaticMethod = helperMethodParams[0].getOriginType().equals(ClassHelper.CLASS_Type);
-        if (Modifier.isPrivate(access) && !isHelperForStaticMethod) {
-            // do not create forwarder for private methods
-            // see GROOVY-7213
+        if (helperMethod.isPrivate() && !isHelperForStaticMethod) {
+            // GROOVY-7213: do not create forwarder for private methods
             return;
         }
+        int modifiers = helperMethod.getModifiers();
         if (!isHelperForStaticMethod) {
-            access = access ^ Opcodes.ACC_STATIC;
+            modifiers ^= Opcodes.ACC_STATIC;
         }
         MethodNode forwarder = new MethodNode(
                 helperMethod.getName(),
-                access,
+                modifiers,
                 fixedReturnType,
                 forwarderParams,
                 exceptionNodes,
                 new ExpressionStatement(forwardExpression)
         );
-        List<AnnotationNode> copied = new LinkedList<AnnotationNode>();
+        List<AnnotationNode> copied = new LinkedList<>();
         List<AnnotationNode> notCopied = Collections.emptyList(); // at this point, should *always* stay empty
         GeneralUtils.copyAnnotatedNodeAnnotations(helperMethod, copied, notCopied);
         if (!copied.isEmpty()) {
@@ -370,8 +368,7 @@ public abstract class TraitComposer {
             // null indicates a static method which may still need generics correction
             GenericsType[] genericsTypes = helperMethod.getGenericsTypes();
             if (genericsTypes != null) {
-                Map<String, ClassNode> methodSpec = new HashMap<String, ClassNode>();
-                methodSpec = GenericsUtils.addMethodGenerics(helperMethod, methodSpec);
+                Map<String, ClassNode> methodSpec = GenericsUtils.addMethodGenerics(helperMethod, Collections.emptyMap());
                 GenericsType[] newGt = GenericsUtils.applyGenericsContextToPlaceHolders(methodSpec, helperMethod.getGenericsTypes());
                 forwarder.setGenericsTypes(newGt);
             }
@@ -380,15 +377,51 @@ public abstract class TraitComposer {
         AnnotationNode bridgeAnnotation = new AnnotationNode(Traits.TRAITBRIDGE_CLASSNODE);
         bridgeAnnotation.addMember("traitClass", new ClassExpression(trait));
         bridgeAnnotation.addMember("desc", new ConstantExpression(BytecodeHelper.getMethodDescriptor(helperMethod.getReturnType(), traitMethodParams)));
-        forwarder.addAnnotation(
-                bridgeAnnotation
-        );
+        forwarder.addAnnotation(bridgeAnnotation);
+
+        MethodNode existingMethod = findExistingMethod(targetNode, forwarder);
+        if (existingMethod != null) {
+            if (!forwarder.isStatic() && existingMethod.isStatic()) {
+                // found an existing static method that is going to conflict with interface
+                unit.addError(createException(trait, targetNode, forwarder, existingMethod));
+                return;
+            }
+        }
 
         if (!shouldSkipMethod(targetNode, forwarder.getName(), forwarderParams)) {
             targetNode.addMethod(forwarder);
         }
 
         createSuperForwarder(targetNode, forwarder, genericsSpec);
+    }
+
+    private static SyntaxException createException(ClassNode trait, ClassNode targetNode, MethodNode forwarder, MethodNode existingMethod) {
+        String middle;
+        ASTNode errorTarget;
+        if (existingMethod.getLineNumber() == -1) {
+            // came from a trait
+            errorTarget = targetNode;
+            List<AnnotationNode> allAnnos = existingMethod.getAnnotations(Traits.TRAITBRIDGE_CLASSNODE);
+            AnnotationNode bridgeAnno = allAnnos == null ? null : allAnnos.get(0);
+            String fromTrait = null;
+            if (bridgeAnno != null) {
+                Expression traitClass = bridgeAnno.getMember("traitClass");
+                if (traitClass instanceof ClassExpression) {
+                    ClassExpression ce = (ClassExpression) traitClass;
+                    fromTrait = ce.getType().getNameWithoutPackage();
+                }
+            }
+            middle = "in '" + targetNode.getNameWithoutPackage();
+            if (fromTrait != null) {
+                middle += "' from trait '" + fromTrait;
+            }
+        } else {
+            errorTarget = existingMethod;
+            middle = "declared in '" + targetNode.getNameWithoutPackage();
+        }
+        String message = "The static '" + forwarder.getName() + "' method " + middle +
+                "' conflicts with the instance method having the same signature from trait '" + trait.getNameWithoutPackage() + "'";
+        return new SyntaxException(message, errorTarget);
     }
 
     private static GenericsType[] removeNonPlaceHolders(GenericsType[] oldTypes) {
@@ -530,8 +563,16 @@ public abstract class TraitComposer {
         return exceptionNodes;
     }
 
+    private static MethodNode findExistingMethod(final ClassNode cNode, final MethodNode forwarder) {
+        return findExistingMethod(cNode, forwarder.getName(), forwarder.getParameters());
+    }
+
+    private static MethodNode findExistingMethod(final ClassNode cNode, final String name, final Parameter[] params) {
+        return cNode.getDeclaredMethod(name, params);
+    }
+
     private static boolean shouldSkipMethod(final ClassNode cNode, final String name, final Parameter[] params) {
-        if (isExistingProperty(name, cNode, params) || cNode.getDeclaredMethod(name, params)!=null) {
+        if (isExistingProperty(name, cNode, params) || findExistingMethod(cNode, name, params) != null) {
             // override exists in the weaved class itself
             return true;
         }

@@ -43,6 +43,7 @@ import org.codehaus.groovy.vmplugin.VMPluginFactory;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -53,7 +54,7 @@ import java.util.Map;
 import java.util.Properties;
 
 /**
- * A registry of MetaClass instances which caches introspection &
+ * A registry of MetaClass instances which caches introspection and
  * reflection information and allows methods to be dynamically added to
  * existing classes at runtime
  */
@@ -63,6 +64,8 @@ public class MetaClassRegistryImpl implements MetaClassRegistry{
      */
     @Deprecated
     public static final String MODULE_META_INF_FILE = "META-INF/services/org.codehaus.groovy.runtime.ExtensionModule";
+    private static final MetaClass[] EMPTY_METACLASS_ARRAY = new MetaClass[0];
+    private static final MetaClassRegistryChangeEventListener[] EMPTY_METACLASSREGISTRYCHANGEEVENTLISTENER_ARRAY = new MetaClassRegistryChangeEventListener[0];
 
     private final boolean useAccessible;
 
@@ -132,25 +135,23 @@ public class MetaClassRegistryImpl implements MetaClassRegistry{
         ClassInfo.getClassInfo(ExpandoMetaClass.class).setStrongMetaClass(emcMetaClass);
 
 
-        addNonRemovableMetaClassRegistryChangeEventListener(new MetaClassRegistryChangeEventListener(){
-            public void updateConstantMetaClass(MetaClassRegistryChangeEvent cmcu) {
-                // The calls to DefaultMetaClassInfo.setPrimitiveMeta and sdyn.setBoolean need to be
-                // ordered. Even though metaClassInfo is thread-safe, it is included in the block
-                // so the meta classes are added to the queue in the same order.
-                synchronized (metaClassInfo) {
-                   metaClassInfo.add(cmcu.getNewMetaClass());
-                   DefaultMetaClassInfo.getNewConstantMetaClassVersioning();
-                   Class c = cmcu.getClassToUpdate();
-                   DefaultMetaClassInfo.setPrimitiveMeta(c, cmcu.getNewMetaClass()==null);
-                   Field sdyn;
-                   try {
-                       sdyn = c.getDeclaredField(Verifier.STATIC_METACLASS_BOOL);
-                       sdyn.setBoolean(null, cmcu.getNewMetaClass()!=null);
-                   } catch (Throwable e) {
-                       //DO NOTHING
-                   }
+        addNonRemovableMetaClassRegistryChangeEventListener(cmcu -> {
+            // The calls to DefaultMetaClassInfo.setPrimitiveMeta and sdyn.setBoolean need to be
+            // ordered. Even though metaClassInfo is thread-safe, it is included in the block
+            // so the meta classes are added to the queue in the same order.
+            synchronized (metaClassInfo) {
+               metaClassInfo.add(cmcu.getNewMetaClass());
+               DefaultMetaClassInfo.getNewConstantMetaClassVersioning();
+               Class c = cmcu.getClassToUpdate();
+               DefaultMetaClassInfo.setPrimitiveMeta(c, cmcu.getNewMetaClass()==null);
+               Field sdyn;
+               try {
+                   sdyn = c.getDeclaredField(Verifier.STATIC_METACLASS_BOOL);
+                   sdyn.setBoolean(null, cmcu.getNewMetaClass()!=null);
+               } catch (Throwable e) {
+                   //DO NOTHING
+               }
 
-                }
             }
         });
    }
@@ -209,11 +210,7 @@ public class MetaClassRegistryImpl implements MetaClassRegistry{
                             newParams
                     );
                     final CachedClass declClass = method.getDeclaringClass();
-                    List<MetaMethod> arr = map.get(declClass);
-                    if (arr == null) {
-                        arr = new ArrayList<MetaMethod>(4);
-                        map.put(declClass, arr);
-                    }
+                    List<MetaMethod> arr = map.computeIfAbsent(declClass, k -> new ArrayList<MetaMethod>(4));
                     arr.add(method);
                     instanceMethods.add(method);
                 }
@@ -227,14 +224,10 @@ public class MetaClassRegistryImpl implements MetaClassRegistry{
 
             for (CachedMethod method : methods) {
                 final int mod = method.getModifiers();
-                if (Modifier.isStatic(mod) && Modifier.isPublic(mod) && method.getCachedMethod().getAnnotation(Deprecated.class) == null) {
+                if (Modifier.isStatic(mod) && Modifier.isPublic(mod) && method.getAnnotation(Deprecated.class) == null) {
                     CachedClass[] paramTypes = method.getParameterTypes();
                     if (paramTypes.length > 0) {
-                        List<MetaMethod> arr = map.get(paramTypes[0]);
-                        if (arr == null) {
-                            arr = new ArrayList<MetaMethod>(4);
-                            map.put(paramTypes[0], arr);
-                        }
+                        List<MetaMethod> arr = map.computeIfAbsent(paramTypes[0], k -> new ArrayList<MetaMethod>(4));
                         if (useInstanceMethods) {
                             final NewInstanceMetaMethod metaMethod = new NewInstanceMetaMethod(method);
                             arr.add(metaMethod);
@@ -252,17 +245,12 @@ public class MetaClassRegistryImpl implements MetaClassRegistry{
 
     private void createMetaMethodFromClass(Map<CachedClass, List<MetaMethod>> map, Class aClass) {
         try {
-            MetaMethod method = (MetaMethod) aClass.newInstance();
+            MetaMethod method = (MetaMethod) aClass.getDeclaredConstructor().newInstance();
             final CachedClass declClass = method.getDeclaringClass();
-            List<MetaMethod> arr = map.get(declClass);
-            if (arr == null) {
-                arr = new ArrayList<MetaMethod>(4);
-                map.put(declClass, arr);
-            }
+            List<MetaMethod> arr = map.computeIfAbsent(declClass, k -> new ArrayList<MetaMethod>(4));
             arr.add(method);
             instanceMethods.add(method);
-        } catch (InstantiationException e) { /* ignore */
-        } catch (IllegalAccessException e) { /* ignore */
+        } catch (InstantiationException | IllegalAccessException | NoSuchMethodException | InvocationTargetException e) { /* ignore */
         }
     }
 
@@ -401,8 +389,8 @@ public class MetaClassRegistryImpl implements MetaClassRegistry{
     protected void fireConstantMetaClassUpdate(Object obj, Class c, final MetaClass oldMC, MetaClass newMc) {
         MetaClassRegistryChangeEventListener[]  listener = getMetaClassRegistryChangeEventListeners();
         MetaClassRegistryChangeEvent cmcu = new MetaClassRegistryChangeEvent(this, obj, c, oldMC, newMc);
-        for (int i = 0; i<listener.length; i++) {
-            listener[i].updateConstantMetaClass(cmcu);
+        for (MetaClassRegistryChangeEventListener metaClassRegistryChangeEventListener : listener) {
+            metaClassRegistryChangeEventListener.updateConstantMetaClass(cmcu);
         }
     }
 
@@ -415,7 +403,7 @@ public class MetaClassRegistryImpl implements MetaClassRegistry{
                     new ArrayList<MetaClassRegistryChangeEventListener>(changeListenerList.size()+nonRemoveableChangeListenerList.size());
             ret.addAll(nonRemoveableChangeListenerList);
             ret.addAll(changeListenerList);
-            return ret.toArray(new MetaClassRegistryChangeEventListener[0]);
+            return ret.toArray(EMPTY_METACLASSREGISTRYCHANGEEVENTLISTENER_ARRAY);
         }
     }
     
@@ -459,7 +447,7 @@ public class MetaClassRegistryImpl implements MetaClassRegistry{
      * @return the iterator.
      */    
     public Iterator iterator() {
-        final MetaClass[] refs = metaClassInfo.toArray(new MetaClass[0]);
+        final MetaClass[] refs = metaClassInfo.toArray(EMPTY_METACLASS_ARRAY);
         
         return new Iterator() {
             // index in the ref array
@@ -527,11 +515,7 @@ public class MetaClassRegistryImpl implements MetaClassRegistry{
             List<MetaMethod> metaMethods = module.getMetaMethods();
             for (MetaMethod metaMethod : metaMethods) {
                 CachedClass cachedClass = metaMethod.getDeclaringClass();
-                List<MetaMethod> methods = map.get(cachedClass);
-                if (methods == null) {
-                    methods = new ArrayList<MetaMethod>(4);
-                    map.put(cachedClass, methods);
-                }
+                List<MetaMethod> methods = map.computeIfAbsent(cachedClass, k -> new ArrayList<MetaMethod>(4));
                 methods.add(metaMethod);
                 if (metaMethod.isStatic()) {
                     staticMethods.add(metaMethod);

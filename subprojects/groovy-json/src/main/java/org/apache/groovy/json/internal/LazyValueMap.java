@@ -44,8 +44,6 @@ import static org.apache.groovy.json.internal.Exceptions.die;
  * The lazyChop is performed on the tree that is touched by the JSONPath expression or its ilk.
  * <p/>
  * The chop operation can be done during parsing or lazily by storing the values in this construct.
- *
- * @author Rick Hightower (insane chipmonk)
  */
 public class LazyValueMap extends AbstractMap<String, Object> implements ValueMap<String, Object> {
 
@@ -71,11 +69,13 @@ public class LazyValueMap extends AbstractMap<String, Object> implements ValueMa
      */
     boolean mapChopped = false;
 
+    @SuppressWarnings("unchecked")
     public LazyValueMap(boolean lazyChop) {
         this.items = new Entry[5];
         this.lazyChop = lazyChop;
     }
 
+    @SuppressWarnings("unchecked")
     public LazyValueMap(boolean lazyChop, int initialSize) {
         this.items = new Entry[initialSize];
         this.lazyChop = lazyChop;

@@ -20,12 +20,16 @@ package org.codehaus.groovy.runtime;
 
 import groovy.lang.EmptyRange;
 import groovy.lang.IntRange;
+import groovy.lang.NumberRange;
 import groovy.lang.Range;
 import org.codehaus.groovy.runtime.typehandling.DefaultTypeTransformation;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.io.OutputStream;
+import java.io.Writer;
 import java.lang.reflect.Array;
+import java.nio.charset.Charset;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -73,7 +77,10 @@ public class DefaultGroovyMethodsSupport {
     // helper method for getAt and putAt
     protected static RangeInfo subListBorders(int size, Range range) {
         if (range instanceof IntRange) {
-            return ((IntRange)range).subListBorders(size);
+            return ((IntRange) range).subListBorders(size);
+        }
+        if (range instanceof NumberRange) {
+            return ((NumberRange) range).subListBorders(size);
         }
         int from = normaliseIndex(DefaultTypeTransformation.intUnbox(range.getFrom()), size);
         int to = normaliseIndex(DefaultTypeTransformation.intUnbox(range.getTo()), size);
@@ -379,5 +386,49 @@ public class DefaultGroovyMethodsSupport {
             }
         }
         return true;
+    }
+
+    protected static void writeUTF16BomIfRequired(final Writer writer, final String charset) throws IOException {
+        writeUTF16BomIfRequired(writer, Charset.forName(charset));
+    }
+
+    protected static void writeUTF16BomIfRequired(final Writer writer, final Charset charset) throws IOException {
+        if ("UTF-16BE".equals(charset.name())) {
+            writeUtf16Bom(writer, true);
+        } else if ("UTF-16LE".equals(charset.name())) {
+            writeUtf16Bom(writer, false);
+        }
+    }
+
+    protected static void writeUTF16BomIfRequired(final OutputStream stream, final String charset) throws IOException {
+        writeUTF16BomIfRequired(stream, Charset.forName(charset));
+    }
+
+    protected static void writeUTF16BomIfRequired(final OutputStream stream, final Charset charset) throws IOException {
+        if ("UTF-16BE".equals(charset.name())) {
+            writeUtf16Bom(stream, true);
+        } else if ("UTF-16LE".equals(charset.name())) {
+            writeUtf16Bom(stream, false);
+        }
+    }
+
+    private static void writeUtf16Bom(OutputStream stream, boolean bigEndian) throws IOException {
+        if (bigEndian) {
+            stream.write(-2);  // FE
+            stream.write(-1);  // FF
+        } else {
+            stream.write(-1);  // FF
+            stream.write(-2);  // FE
+        }
+    }
+
+    private static void writeUtf16Bom(Writer writer, boolean bigEndian) throws IOException {
+        if (bigEndian) {
+            writer.write(-2);  // FE
+            writer.write(-1);  // FF
+        } else {
+            writer.write(-1);  // FF
+            writer.write(-2);  // FE
+        }
     }
 }

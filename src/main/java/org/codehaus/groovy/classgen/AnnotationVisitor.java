@@ -39,10 +39,10 @@ import org.codehaus.groovy.control.messages.SyntaxErrorMessage;
 import org.codehaus.groovy.syntax.SyntaxException;
 import org.codehaus.groovy.vmplugin.VMPluginFactory;
 
-import java.lang.reflect.Field;
-import java.lang.reflect.Modifier;
 import java.util.List;
 import java.util.Map;
+
+import static org.apache.groovy.ast.tools.ExpressionUtils.transformInlineConstants;
 
 /**
  * An Annotation visitor responsible for:
@@ -85,19 +85,19 @@ public class AnnotationVisitor {
         if (!checkIfValidEnumConstsAreUsed(node)) {
             return node;
         }
-        
+
         Map<String, Expression> attributes = node.getMembers();
         for (Map.Entry<String, Expression> entry : attributes.entrySet()) {
             String attrName = entry.getKey();
-            Expression attrExpr = transformInlineConstants(entry.getValue());
-            entry.setValue(attrExpr);
             ClassNode attrType = getAttributeType(node, attrName);
+            Expression attrExpr = transformInlineConstants(entry.getValue(), attrType);
+            entry.setValue(attrExpr);
             visitExpression(attrName, attrExpr, attrType);
         }
         VMPluginFactory.getPlugin().configureAnnotation(node);
         return this.annotation;
     }
-    
+
     private boolean checkIfValidEnumConstsAreUsed(AnnotationNode node) {
         Map<String, Expression> attributes = node.getMembers();
         for (Map.Entry<String, Expression> entry : attributes.entrySet()) {
@@ -106,7 +106,7 @@ public class AnnotationVisitor {
         }
         return true;
     }
-    
+
     private boolean validateEnumConstant(Expression exp) {
         if (exp instanceof PropertyExpression) {
             PropertyExpression pe = (PropertyExpression) exp;
@@ -132,35 +132,6 @@ public class AnnotationVisitor {
         return true;
     }
 
-    private Expression transformInlineConstants(Expression exp) {
-        if (exp instanceof PropertyExpression) {
-            PropertyExpression pe = (PropertyExpression) exp;
-            if (pe.getObjectExpression() instanceof ClassExpression) {
-                ClassExpression ce = (ClassExpression) pe.getObjectExpression();
-                ClassNode type = ce.getType();
-                if (type.isEnum() || !type.isResolved())
-                    return exp;
-
-                try {
-                    Field field = type.getTypeClass().getField(pe.getPropertyAsString());
-                    if (field != null && Modifier.isStatic(field.getModifiers()) && Modifier.isFinal(field.getModifiers())) {
-                        return new ConstantExpression(field.get(null));
-                    }
-                } catch(Exception e) {
-                    // ignore, leave property expression in place and we'll report later
-                }
-            }
-        } else if (exp instanceof ListExpression) {
-            ListExpression le = (ListExpression) exp;
-            ListExpression result = new ListExpression();
-            for (Expression e : le.getExpressions()) {
-                result.addExpression(transformInlineConstants(e));
-            }
-            return result;
-        }
-        return exp;
-    }
-
     private boolean checkIfMandatoryAnnotationValuesPassed(AnnotationNode node) {
         boolean ok = true;
         Map attributes = node.getMembers();
@@ -183,7 +154,7 @@ public class AnnotationVisitor {
         // if it is an error, we have to test it at another place. But size==0 is
         // an error, because it means that no such attribute exists.
         if (methods.isEmpty()) {
-            addError("'" + attrName + "'is not part of the annotation " + classNode, node);
+            addError("'" + attrName + "'is not part of the annotation " + classNode.getNameWithoutPackage(), node);
             return ClassHelper.OBJECT_TYPE;
         }
         MethodNode method = (MethodNode) methods.get(0);
@@ -250,8 +221,12 @@ public class AnnotationVisitor {
     }
 
     private ConstantExpression getConstantExpression(Expression exp, ClassNode attrType) {
-        if (exp instanceof ConstantExpression) {
-            return (ConstantExpression) exp;
+        Expression result = exp;
+        if (!(result instanceof ConstantExpression)) {
+            result = transformInlineConstants(result, attrType);
+        }
+        if (result instanceof ConstantExpression) {
+            return (ConstantExpression) result;
         }
         String base = "Expected '" + exp.getText() + "' to be an inline constant of type " + attrType.getName();
         if (exp instanceof PropertyExpression) {
@@ -261,14 +236,11 @@ public class AnnotationVisitor {
         } else {
             addError(base, exp);
         }
-        return ConstantExpression.EMPTY_EXPRESSION;
+        ConstantExpression ret = new ConstantExpression(null);
+        ret.setSourcePosition(exp);
+        return ret;
     }
 
-    /**
-     * @param attrName   the name
-     * @param expression the expression
-     * @param attrType   the type
-     */
     protected void visitAnnotationExpression(String attrName, AnnotationConstantExpression expression, ClassNode attrType) {
         AnnotationNode annotationNode = (AnnotationNode) expression.getValue();
         AnnotationVisitor visitor = new AnnotationVisitor(this.source, this.errorCollector);
@@ -335,5 +307,4 @@ public class AnnotationVisitor {
             checkCircularReference(searchClass, method.getReturnType(), code.getExpression());
         }
     }
-
 }

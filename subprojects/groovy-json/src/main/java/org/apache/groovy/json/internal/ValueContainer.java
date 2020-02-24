@@ -27,9 +27,6 @@ import java.util.Map;
 import static org.apache.groovy.json.internal.Exceptions.die;
 import static org.apache.groovy.json.internal.Exceptions.sputs;
 
-/**
- * @author Rick Hightower
- */
 public class ValueContainer implements CharSequence, Value {
 
     public static final Value TRUE = new ValueContainer(Type.TRUE);
@@ -117,6 +114,7 @@ public class ValueContainer implements CharSequence, Value {
         return null;
     }
 
+    @SuppressWarnings("unchecked")
     public <T extends Enum> T toEnum(Class<T> cls) {
         return (T) value;
     }

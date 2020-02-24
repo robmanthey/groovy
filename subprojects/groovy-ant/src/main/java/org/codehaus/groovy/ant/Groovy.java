@@ -18,12 +18,12 @@
  */
 package org.codehaus.groovy.ant;
 
+import groovy.ant.AntBuilder;
 import groovy.lang.Binding;
 import groovy.lang.GroovyClassLoader;
 import groovy.lang.GroovyShell;
 import groovy.lang.MissingMethodException;
 import groovy.lang.Script;
-import groovy.util.AntBuilder;
 import org.apache.groovy.io.StringBuilderWriter;
 import org.apache.tools.ant.BuildException;
 import org.apache.tools.ant.Project;
@@ -36,6 +36,7 @@ import org.apache.tools.ant.util.FileUtils;
 import org.codehaus.groovy.control.CompilationFailedException;
 import org.codehaus.groovy.control.CompilerConfiguration;
 import org.codehaus.groovy.control.customizers.ImportCustomizer;
+import org.codehaus.groovy.reflection.ReflectionUtils;
 import org.codehaus.groovy.runtime.InvokerHelper;
 import org.codehaus.groovy.runtime.ResourceGroovyMethods;
 import org.codehaus.groovy.tools.ErrorReporter;
@@ -369,12 +370,12 @@ public class Groovy extends Java {
 
         while ((line = in.readLine()) != null) {
             line = getProject().replaceProperties(line);
-            if (line.indexOf("--") >= 0) {
+            if (line.contains("--")) {
                 txt.append("\n");
             }
         }
         // Catch any statements not followed by ;
-        if (!txt.toString().equals("")) {
+        if (!txt.toString().isEmpty()) {
             execGroovy(txt.toString(), out);
         }
     }
@@ -389,7 +390,7 @@ public class Groovy extends Java {
         log.debug("execGroovy()");
 
         // Check and ignore empty statements
-        if ("".equals(txt.trim())) {
+        if (txt.trim().isEmpty()) {
             return;
         }
 
@@ -430,7 +431,7 @@ public class Groovy extends Java {
             try {
                 final Object propsHandler = project.getClass().getMethod("getPropsHandler").invoke(project);
                 final Field contextField = propsHandler.getClass().getDeclaredField("context");
-                contextField.setAccessible(true);
+                ReflectionUtils.trySetAccessible(contextField);
                 final Object context = contextField.get(propsHandler);
                 mavenPom = InvokerHelper.invokeMethod(context, "getProject", EMPTY_OBJECT_ARRAY);
             }
@@ -451,12 +452,7 @@ public class Groovy extends Java {
         final String scriptName = computeScriptName();
         final GroovyClassLoader classLoader =
                 AccessController.doPrivileged(
-                        new PrivilegedAction<GroovyClassLoader>() {
-                            @Override
-                            public GroovyClassLoader run() {
-                                return new GroovyClassLoader(baseClassLoader);
-                            }
-                        });
+                        (PrivilegedAction<GroovyClassLoader>) () -> new GroovyClassLoader(baseClassLoader));
         addClassPathes(classLoader);
         configureCompiler();
         final GroovyShell groovy = new GroovyShell(classLoader, new Binding(), configuration);
@@ -528,9 +524,7 @@ public class Groovy extends Java {
                 shell.run(txt, scriptName, cmdline.getCommandline());
             }
         }
-        catch (final CompilationFailedException e) {
-            processError(e);
-        } catch (IOException e) {
+        catch (final CompilationFailedException | IOException e) {
             processError(e);
         }
     }
@@ -583,9 +577,9 @@ public class Groovy extends Java {
         if (groovyHome == null) {
             throw new IllegalStateException("Neither ${groovy.home} nor GROOVY_HOME defined.");
         }
-        File jarDir = new File(groovyHome, "embeddable");
+        File jarDir = new File(groovyHome, "lib");
         if (!jarDir.exists()) {
-            throw new IllegalStateException("GROOVY_HOME incorrectly defined. No embeddable directory found in: " + groovyHome);
+            throw new IllegalStateException("GROOVY_HOME incorrectly defined. No lib directory found in: " + groovyHome);
         }
         final File[] files = jarDir.listFiles();
         for (File file : files) {

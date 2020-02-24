@@ -17,6 +17,9 @@
  *  under the License.
  */
 package org.codehaus.groovy.runtime
+
+import groovy.test.GroovyTestCase
+
 /**
  * Tests for DGM methods
  */
@@ -311,5 +314,12 @@ class DefaultGroovyMethodsTest extends GroovyTestCase {
     void testWhichJar() {
         assert DefaultGroovyMethods.getLocation(org.objectweb.asm.Opcodes).getFile().matches(/(.+\/)?asm[-].+\.jar/)
         assert null == DefaultGroovyMethods.getLocation(String)
+    }
+
+    void testThrowableAsString() {
+        def result = new Exception("this is an exception").asString()
+
+        assert result.contains("this is an exception")
+        assert result.contains("at org.codehaus.groovy.runtime.DefaultGroovyMethodsTest.testThrowableAsString(DefaultGroovyMethodsTest.groovy:")
     }
 }

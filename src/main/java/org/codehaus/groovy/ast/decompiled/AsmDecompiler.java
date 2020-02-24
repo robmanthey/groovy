@@ -43,8 +43,6 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * A utility class responsible for decompiling JVM class files and producing {@link ClassStub} objects reflecting their structure.
- *
- * @author Peter Gromov
  */
 public abstract class AsmDecompiler {
 
@@ -142,10 +140,7 @@ public abstract class AsmDecompiler {
                     @Override
                     public AnnotationVisitor visitParameterAnnotation(int parameter, String desc, boolean visible) {
                         if (stub.parameterAnnotations == null) stub.parameterAnnotations = new HashMap<Integer, List<AnnotationStub>>(1);
-                        List<AnnotationStub> list = stub.parameterAnnotations.get(parameter);
-                        if (list == null) {
-                            stub.parameterAnnotations.put(parameter, list = new ArrayList<AnnotationStub>());
-                        }
+                        List<AnnotationStub> list = stub.parameterAnnotations.computeIfAbsent(parameter, k -> new ArrayList<AnnotationStub>());
                         AnnotationStub annotationStub = new AnnotationStub(desc);
                         list.add(annotationStub);
                         return readAnnotationMembers(annotationStub);
@@ -160,6 +155,12 @@ public abstract class AsmDecompiler {
                             }
                         };
                     }
+
+                    @Override
+                    public void visitParameter(String name, int access) {
+                        if (stub.parameterNames == null) stub.parameterNames = new ArrayList<String>();
+                        stub.parameterNames.add(name);
+                    }
                 };
             }
             return null;
@@ -172,7 +173,7 @@ public abstract class AsmDecompiler {
 
         @Override
         public FieldVisitor visitField(int access, String name, String desc, String signature, Object value) {
-            final FieldStub stub = new FieldStub(name, access, desc, signature);
+            final FieldStub stub = new FieldStub(name, access, desc, signature, value);
             if (result.fields == null) result.fields = new ArrayList<FieldStub>(1);
             result.fields.add(stub);
             return new FieldVisitor(api) {

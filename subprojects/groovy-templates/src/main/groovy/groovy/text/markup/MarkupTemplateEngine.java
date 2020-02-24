@@ -55,8 +55,6 @@ import java.util.regex.Pattern;
 
 /**
  * A template engine which leverages {@link groovy.xml.StreamingMarkupBuilder} to generate XML/XHTML.
- *
- * @author Cedric Champeau
  */
 public class MarkupTemplateEngine extends TemplateEngine {
 
@@ -292,7 +290,7 @@ public class MarkupTemplateEngine extends TemplateEngine {
         }
 
         public boolean hasLocale() {
-            return locale != null && !"".equals(locale);
+            return locale != null && !locale.isEmpty();
         }
     }
 

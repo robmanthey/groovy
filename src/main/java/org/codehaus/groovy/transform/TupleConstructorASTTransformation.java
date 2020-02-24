@@ -39,6 +39,7 @@ import org.codehaus.groovy.ast.expr.Expression;
 import org.codehaus.groovy.ast.expr.VariableExpression;
 import org.codehaus.groovy.ast.stmt.BlockStatement;
 import org.codehaus.groovy.ast.stmt.EmptyStatement;
+import org.codehaus.groovy.ast.stmt.ExpressionStatement;
 import org.codehaus.groovy.ast.stmt.Statement;
 import org.codehaus.groovy.classgen.VariableScopeVisitor;
 import org.codehaus.groovy.control.CompilationUnit;
@@ -47,7 +48,6 @@ import org.codehaus.groovy.control.SourceUnit;
 
 import java.lang.annotation.Annotation;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -72,6 +72,7 @@ import static org.codehaus.groovy.ast.tools.GeneralUtils.equalsNullX;
 import static org.codehaus.groovy.ast.tools.GeneralUtils.getAllProperties;
 import static org.codehaus.groovy.ast.tools.GeneralUtils.ifElseS;
 import static org.codehaus.groovy.ast.tools.GeneralUtils.ifS;
+import static org.codehaus.groovy.ast.tools.GeneralUtils.nullX;
 import static org.codehaus.groovy.ast.tools.GeneralUtils.params;
 import static org.codehaus.groovy.ast.tools.GeneralUtils.propX;
 import static org.codehaus.groovy.ast.tools.GeneralUtils.stmt;
@@ -246,12 +247,8 @@ public class TupleConstructorASTTransformation extends AbstractASTTransformation
         }
 
         if (includes != null) {
-            Comparator<Parameter> includeComparator = new Comparator<Parameter>() {
-                public int compare(Parameter p1, Parameter p2) {
-                    return Integer.compare(includes.indexOf(p1.getName()), includes.indexOf(p2.getName()));
-                }
-            };
-            Collections.sort(params, includeComparator);
+            Comparator<Parameter> includeComparator = Comparator.comparingInt(p -> includes.indexOf(p.getName()));
+            params.sort(includeComparator);
         }
 
         boolean hasMapCons = AnnotatedNodeUtils.hasAnnotation(cNode, MapConstructorASTTransformation.MY_TYPE);
@@ -263,6 +260,11 @@ public class TupleConstructorASTTransformation extends AbstractASTTransformation
         if (sourceUnit != null && !body.isEmpty()) {
             VariableScopeVisitor scopeVisitor = new VariableScopeVisitor(sourceUnit);
             scopeVisitor.visitClass(cNode);
+        }
+
+        // GROOVY-8868 don't want an empty body to cause the constructor to be deleted later
+        if (body.isEmpty()) {
+            body.addStatement(new ExpressionStatement(ConstantExpression.EMPTY_EXPRESSION));
         }
 
         // If the first param is def or a Map, named args might not work as expected so we add a hard-coded map constructor in this case
@@ -292,12 +294,16 @@ public class TupleConstructorASTTransformation extends AbstractASTTransformation
     }
 
     private static Expression providedOrDefaultInitialValue(FieldNode fNode) {
-        Expression initialExp = fNode.getInitialExpression() != null ? fNode.getInitialExpression() : ConstantExpression.NULL;
+        Expression initialExp = fNode.getInitialExpression() != null ? fNode.getInitialExpression() : nullX();
         final ClassNode paramType = fNode.getType();
-        if (ClassHelper.isPrimitiveType(paramType) && initialExp.equals(ConstantExpression.NULL)) {
+        if (ClassHelper.isPrimitiveType(paramType) && isNull(initialExp)) {
             initialExp = primitivesInitialValues.get(paramType.getTypeClass());
         }
         return initialExp;
+    }
+
+    private static boolean isNull(Expression exp) {
+        return exp instanceof ConstantExpression && ((ConstantExpression) exp).isNullExpression();
     }
 
     public static void addSpecialMapConstructors(int modifiers, ClassNode cNode, String message, boolean addNoArg) {

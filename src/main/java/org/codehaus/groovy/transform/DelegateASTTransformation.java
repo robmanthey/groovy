@@ -35,6 +35,7 @@ import org.codehaus.groovy.ast.PropertyNode;
 import org.codehaus.groovy.ast.expr.ArgumentListExpression;
 import org.codehaus.groovy.ast.expr.Expression;
 import org.codehaus.groovy.ast.expr.MethodCallExpression;
+import org.codehaus.groovy.ast.tools.BeanUtils;
 import org.codehaus.groovy.ast.tools.GenericsUtils;
 import org.codehaus.groovy.classgen.Verifier;
 import org.codehaus.groovy.control.CompilePhase;
@@ -42,10 +43,12 @@ import org.codehaus.groovy.control.SourceUnit;
 
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import static org.apache.groovy.ast.tools.ClassNodeUtils.addGeneratedMethod;
 import static org.codehaus.groovy.ast.ClassHelper.make;
 import static org.codehaus.groovy.ast.tools.GeneralUtils.assignS;
 import static org.codehaus.groovy.ast.tools.GeneralUtils.callThisX;
@@ -150,6 +153,8 @@ public class DelegateASTTransformation extends AbstractASTTransformation {
             delegate.includeTypes = getMemberClassList(node, MEMBER_INCLUDE_TYPES);
             checkIncludeExcludeUndefinedAware(node, delegate.excludes, delegate.includes,
                                               delegate.excludeTypes, delegate.includeTypes, MY_TYPE_NAME);
+            if (!checkPropertyOrMethodList(delegate.type, delegate.includes, "includes", node, MY_TYPE_NAME)) return;
+            if (!checkPropertyOrMethodList(delegate.type, delegate.excludes, "excludes", node, MY_TYPE_NAME)) return;
 
             final List<MethodNode> ownerMethods = getAllMethods(delegate.owner);
             for (MethodNode mn : delegateMethods) {
@@ -166,7 +171,7 @@ public class DelegateASTTransformation extends AbstractASTTransformation {
             if (delegate.type.isArray()) {
                 boolean skipLength = delegate.excludes != null && (delegate.excludes.contains("length") || delegate.excludes.contains("getLength"));
                 if (!skipLength) {
-                    delegate.owner.addMethod("getLength",
+                    addGeneratedMethod(delegate.owner, "getLength",
                             ACC_PUBLIC,
                             ClassHelper.int_TYPE,
                             Parameter.EMPTY_ARRAY,
@@ -195,12 +200,45 @@ public class DelegateASTTransformation extends AbstractASTTransformation {
         }
     }
 
+    private boolean checkPropertyOrMethodList(ClassNode cNode, List<String> propertyNameList, String listName, AnnotationNode anno, String typeName) {
+        if (propertyNameList == null || propertyNameList.isEmpty()) {
+            return true;
+        }
+        final Set<String> pNames = new HashSet<>();
+        final Set<String> mNames = new HashSet<>();
+        for (PropertyNode pNode : BeanUtils.getAllProperties(cNode, false, false, false)) {
+            String name = pNode.getField().getName();
+            pNames.add(name);
+            // add getter/setters since Groovy compiler hasn't added property accessors yet
+            String capitalized = Verifier.capitalize(name);
+            if ((pNode.getModifiers() & ACC_FINAL) == 0) {
+                mNames.add("set" + capitalized);
+            }
+            mNames.add("get" + capitalized);
+            boolean isPrimBool = pNode.getOriginType().equals(ClassHelper.boolean_TYPE);
+            if (isPrimBool) {
+                mNames.add("is" + capitalized);
+            }
+        }
+        for (MethodNode mNode : cNode.getAllDeclaredMethods()) {
+            mNames.add(mNode.getName());
+        }
+        boolean result = true;
+        for (String name : propertyNameList) {
+            if (!pNames.contains(name) && !mNames.contains(name)) {
+                addError("Error during " + typeName + " processing: '" + listName + "' property or method '" + name + "' does not exist.", anno);
+                result = false;
+            }
+        }
+        return result;
+    }
+
     private static void addSetterIfNeeded(DelegateDescription delegate, PropertyNode prop, String name, boolean allNames) {
         String setterName = "set" + Verifier.capitalize(name);
         if ((prop.getModifiers() & ACC_FINAL) == 0
                 && delegate.owner.getSetterMethod(setterName) == null && delegate.owner.getProperty(name) == null
                 && !shouldSkipPropertyMethod(name, setterName, delegate.excludes, delegate.includes, allNames)) {
-            delegate.owner.addMethod(setterName,
+            addGeneratedMethod(delegate.owner, setterName,
                     ACC_PUBLIC,
                     ClassHelper.VOID_TYPE,
                     params(new Parameter(GenericsUtils.nonGeneric(prop.getType()), "value")),
@@ -232,7 +270,7 @@ public class DelegateASTTransformation extends AbstractASTTransformation {
             if ((prefix.equals("get") && willHaveGetAccessor && !ownerWillHaveGetAccessor.get()
                     || prefix.equals("is") && willHaveIsAccessor && !ownerWillHaveIsAccessor.get())
                     && !shouldSkipPropertyMethod(name, getterName, delegate.excludes, delegate.includes, allNames)) {
-                delegate.owner.addMethod(getterName,
+                addGeneratedMethod(delegate.owner, getterName,
                         ACC_PUBLIC,
                         GenericsUtils.nonGeneric(prop.getType()),
                         Parameter.EMPTY_ARRAY,
@@ -327,7 +365,7 @@ public class DelegateASTTransformation extends AbstractASTTransformation {
                     args);
             mce.setSourcePosition(delegate.delegate);
             ClassNode returnType = correctToGenericsSpecRecurse(genericsSpec, candidate.getReturnType(), currentMethodGenPlaceholders);
-            MethodNode newMethod = delegate.owner.addMethod(candidate.getName(),
+            MethodNode newMethod = addGeneratedMethod(delegate.owner, candidate.getName(),
                     candidate.getModifiers() & (~ACC_ABSTRACT) & (~ACC_NATIVE),
                     returnType,
                     newParams,
@@ -336,7 +374,7 @@ public class DelegateASTTransformation extends AbstractASTTransformation {
             newMethod.setGenericsTypes(candidate.getGenericsTypes());
 
             if (memberHasValue(delegate.annotation, MEMBER_METHOD_ANNOTATIONS, true)) {
-                newMethod.addAnnotations(copyAnnotatedNodeAnnotations(candidate, MY_TYPE_NAME));
+                newMethod.addAnnotations(copyAnnotatedNodeAnnotations(candidate, MY_TYPE_NAME, false));
             }
         }
     }

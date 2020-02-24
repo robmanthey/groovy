@@ -36,7 +36,6 @@ import org.codehaus.groovy.ast.Variable;
 import org.codehaus.groovy.ast.VariableScope;
 import org.codehaus.groovy.ast.expr.ArgumentListExpression;
 import org.codehaus.groovy.ast.expr.ClosureExpression;
-import org.codehaus.groovy.ast.expr.ConstantExpression;
 import org.codehaus.groovy.ast.expr.ConstructorCallExpression;
 import org.codehaus.groovy.ast.expr.DeclarationExpression;
 import org.codehaus.groovy.ast.expr.Expression;
@@ -46,7 +45,6 @@ import org.codehaus.groovy.ast.stmt.ExpressionStatement;
 import org.codehaus.groovy.classgen.VariableScopeVisitor;
 import org.codehaus.groovy.control.CompilePhase;
 import org.codehaus.groovy.control.SourceUnit;
-import org.codehaus.groovy.runtime.MetaClassHelper;
 import org.objectweb.asm.Opcodes;
 
 import java.util.ArrayList;
@@ -54,9 +52,12 @@ import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 
+import static org.apache.groovy.ast.tools.ClassNodeUtils.addGeneratedConstructor;
+import static org.apache.groovy.util.BeanUtils.capitalize;
 import static org.codehaus.groovy.ast.ClassHelper.make;
 import static org.codehaus.groovy.ast.tools.GeneralUtils.assignX;
 import static org.codehaus.groovy.ast.tools.GeneralUtils.block;
+import static org.codehaus.groovy.ast.tools.GeneralUtils.nullX;
 import static org.codehaus.groovy.ast.tools.GeneralUtils.param;
 import static org.codehaus.groovy.ast.tools.GeneralUtils.params;
 import static org.codehaus.groovy.ast.tools.GeneralUtils.propX;
@@ -118,7 +119,7 @@ public class FieldASTTransformation extends ClassCodeExpressionTransformer imple
                     addError("Can't have a final field also annotated with @" + OPTION_TYPE.getNameWithoutPackage(), de);
                 }
             } else {
-                String setterName = "set" + MetaClassHelper.capitalize(variableName);
+                String setterName = "set" + capitalize(variableName);
                 cNode.addMethod(setterName, ACC_PUBLIC | ACC_SYNTHETIC, ClassHelper.VOID_TYPE, params(param(ve.getType(), variableName)), ClassNode.EMPTY_ARRAY, block(
                         stmt(assignX(propX(varX("this"), variableName), varX(variableName)))
                 ));
@@ -170,7 +171,7 @@ public class FieldASTTransformation extends ClassCodeExpressionTransformer imple
                     // TODO make EmptyExpression work
                     // partially works but not if only thing in script
                     // return EmptyExpression.INSTANCE;
-                    return new ConstantExpression(null);
+                    return nullX();
                 }
                 addError("Annotation " + MY_TYPE_NAME + " can only be used within a Script body.", expr);
                 return expr;
@@ -229,7 +230,7 @@ public class FieldASTTransformation extends ClassCodeExpressionTransformer imple
             }
             type.removeConstructor(constructor);
             // code doesn't mention the removed param at this point, okay to leave as is
-            type.addConstructor(constructor.getModifiers(), newParams, constructor.getExceptions(), constructor.getCode());
+            addGeneratedConstructor(type, constructor.getModifiers(), newParams, constructor.getExceptions(), constructor.getCode());
             type.removeField(variableName);
         }
     }

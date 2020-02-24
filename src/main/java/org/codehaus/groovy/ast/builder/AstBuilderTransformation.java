@@ -47,10 +47,8 @@ import java.util.List;
  * closure source must be given a goto label. It is the "from string"
  * approach's responsibility to remove the BlockStatement created
  * by the label.
- *
- * @author Hamlet D'Arcy
  */
-
+@Deprecated
 @GroovyASTTransformation(phase = CompilePhase.SEMANTIC_ANALYSIS)
 public class AstBuilderTransformation extends MethodCallTransformation {
 
@@ -72,7 +70,7 @@ public class AstBuilderTransformation extends MethodCallTransformation {
      */
     private static class AstBuilderInvocationTrap extends MethodInvocationTrap {
 
-        private final List<String> factoryTargets = new ArrayList<String>();
+        private final List<String> factoryTargets = new ArrayList<>();
 
         /**
          * Creates the trap and captures all the ways in which a class may be referenced via imports.
@@ -124,7 +122,7 @@ public class AstBuilderTransformation extends MethodCallTransformation {
         }
 
         private static List<Expression> getNonClosureArguments(MethodCallExpression call) {
-            List<Expression> result = new ArrayList<Expression>();
+            List<Expression> result = new ArrayList<>();
             if (call.getArguments() instanceof TupleExpression) {
                 for (ASTNode node : ((TupleExpression) call.getArguments()).getExpressions()) {
                     if (!(node instanceof ClosureExpression)) {
@@ -163,7 +161,7 @@ public class AstBuilderTransformation extends MethodCallTransformation {
                 // is method object correct type?
                 if (call.getObjectExpression() != null && call.getObjectExpression().getType() != null) {
                     String name = call.getObjectExpression().getType().getName();
-                    if (name != null && !"".equals(name) && factoryTargets.contains(name)) {
+                    if (name != null && !name.isEmpty() && factoryTargets.contains(name)) {
 
                         // is one of the arguments a closure?
                         if (call.getArguments() != null && call.getArguments() instanceof TupleExpression) {

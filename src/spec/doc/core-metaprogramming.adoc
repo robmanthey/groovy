@@ -26,12 +26,13 @@ The first allows altering the class model and the behavior of a program at runti
 at compile-time. Both have pros and cons that we will detail in this section.
 
 == Runtime metaprogramming
+
 With runtime metaprogramming we can postpone to runtime the decision to intercept, inject and even synthesize methods of classes and interfaces. For a deep understanding of Groovy's metaobject protocol (MOP) we need to understand Groovy objects and Groovy's method handling.
 In Groovy we work with three kinds of objects: POJO, POGO and Groovy Interceptors. Groovy allows metaprogramming for all types of objects but in a different manner.
 
 - POJO - A regular Java object whose class can be written in Java or any other language for the JVM.
 - POGO - A Groovy object whose class is written in Groovy. It extends `java.lang.Object` and implements the gapi:groovy.lang.GroovyObject[] interface by default.
-- Groovy Interceptor - A Groovy object that implements the gapi:groovy.lang.GroovyInterceptable[] interface and has method-interception capability which is discussed in the <<core-metaprogramming.adoc#_groovyinterceptable,GroovyInterceptable>> section.
+- Groovy Interceptor - A Groovy object that implements the gapi:groovy.lang.GroovyInterceptable[] interface and has method-interception capability which is discussed in the <<_groovyinterceptable,GroovyInterceptable>> section.
 
 For every method call Groovy checks whether the object is a POJO or a POGO. For POJOs, Groovy fetches its `MetaClass` from the gapi:groovy.lang.MetaClassRegistry[] and delegates method invocation to it. For POGOs, Groovy takes more steps, as illustrated in the following figure:
 
@@ -62,7 +63,7 @@ public interface GroovyObject {
 
 ==== invokeMethod
 
-This method is primarily intended to be used in conjunction with the <<core-metaprogramming.adoc#_groovyinterceptable,GroovyInterceptable>>
+This method is primarily intended to be used in conjunction with the <<_groovyinterceptable,GroovyInterceptable>>
 interface or an object's `MetaClass` where it will intercept all method calls.
 
 It is also invoked when the method called is not present on a Groovy object. Here is a simple example using an
@@ -74,7 +75,7 @@ include::{projectdir}/src/spec/test/metaprogramming/GroovyObjectTest.groovy[tags
 ----
 
 However, the use of `invokeMethod` to intercept missing methods is discouraged.  In cases where the intent is to only
-intercept method calls in the case of a failed method dispatch use <<core-metaprogramming.adoc#_methodmissing,methodMissing>>
+intercept method calls in the case of a failed method dispatch use <<_methodmissing,methodMissing>>
 instead.
 
 ==== get/setProperty
@@ -97,7 +98,7 @@ include::{projectdir}/src/spec/test/metaprogramming/GroovyObjectTest.groovy[tags
 
 ==== get/setMetaClass
 
-You can a access an object's `metaClass` or set your own `MetaClass` implementation for changing the default interception mechanism. For example, you can write your own implementation of the `MetaClass` interface and assign it to objects in order to change the interception mechanism:
+You can access an object's `metaClass` or set your own `MetaClass` implementation for changing the default interception mechanism. For example, you can write your own implementation of the `MetaClass` interface and assign it to objects in order to change the interception mechanism:
 
 [source,groovy]
 ----
@@ -109,7 +110,7 @@ someObject.metaClass = new OwnMetaClassImplementation()
 ----
 
 [NOTE]
-You can find an additional example in the <<core-metaprogramming.adoc#_groovyinterceptable,GroovyInterceptable>> topic.
+You can find an additional example in the <<_groovyinterceptable,GroovyInterceptable>> topic.
 
 === get/setAttribute
 
@@ -160,7 +161,7 @@ class GORM {
 }
 ----
 
-Notice how, if we find a method to invoke, we then dynamically register a new method on the fly using <<core-metaprogramming.adoc#metaprogramming_emc,ExpandoMetaClass>>.
+Notice how, if we find a method to invoke, we then dynamically register a new method on the fly using <<metaprogramming_emc,ExpandoMetaClass>>.
 This is so that the next time the same method is called it is more efficient. This way of using `methodMissing` does not have
 the overhead of `invokeMethod` _and_ is not expensive from the second call on.
 
@@ -187,9 +188,25 @@ include::{projectdir}/src/spec/test/metaprogramming/MethodPropertyMissingTest.gr
 As with `methodMissing` it is best practice to dynamically register new properties at runtime to improve the overall lookup
 performance.
 
-[NOTE]
-`methodMissing` and `propertyMissing` methods that deal with static methods and properties can be added via
-the <<core-metaprogramming.adoc#metaprogramming_emc,ExpandoMetaClass>>.
+=== static methodMissing
+
+Static variant of `methodMissing` method can be added via the <<metaprogramming_emc,ExpandoMetaClass>>
+or can be implemented at the class level with `$static_methodMissing` method.
+
+[source,groovy]
+----
+include::{projectdir}/src/spec/test/metaprogramming/StaticPropertyMissingAndMethodMissingTest.groovy[tags=static_method_missing,indent=0]
+----
+
+=== static propertyMissing
+
+Static variant of `propertyMissing` method can be added via the <<metaprogramming_emc,ExpandoMetaClass>>
+or can be implemented at the class level with `$static_propertyMissing` method.
+
+[source,groovy]
+----
+include::{projectdir}/src/spec/test/metaprogramming/StaticPropertyMissingAndMethodMissingTest.groovy[tags=static_property_missing,indent=0]
+----
 
 === GroovyInterceptable
 The gapi:groovy.lang.GroovyInterceptable[] interface is marker interface that extends `GroovyObject` and is used to notify the Groovy runtime that all methods should be intercepted through the method dispatcher mechanism of the Groovy runtime.
@@ -227,7 +244,7 @@ include::{projectdir}/src/spec/test/metaprogramming/InterceptionThroughMetaClass
 ----
 
 [NOTE]
-Additional information about `MetaClass` can be found in the <<core-metaprogramming.adoc#_metaclasses,MetaClasses>> section.
+Additional information about `MetaClass` can be found in the <<_metaclasses,MetaClasses>> section.
 
 [[categories]]
 === Categories
@@ -341,15 +358,25 @@ Applying the `@Category` annotation has the advantage of being able to use insta
 first parameter. The target type class is given as an argument to the annotation instead.
 
 [NOTE]
-There is a distinct section on `@Category` in the <<core-metaprogramming.adoc#xform-Category,compile-time metaprogramming section>>.
+There is a distinct section on `@Category` in the <<xform-Category,compile-time metaprogramming section>>.
 
 === Metaclasses
 
-As explained in other section, Metaclasses has a central role in the method resolution. For every method invocation from groovy code, Groovy will find the `MetaClass` for the given object and delegate the method resolution to the metaclass via gapid:groovy.lang.MetaClass#invokeMethod(java.lang.Class,java.lang.Object,java.lang.String,java.lang.Object,boolean,boolean)[MetaClass#invokeMethod] which should not be confused with gapid:groovy.lang.GroovyObject#invokeMethod(java.lang.String,java.lang.Object)[GroovyObject#invokeMethod].
+As explained earlier, Metaclasses play a central role in method resolution.
+For every method invocation from groovy code, Groovy will find the `MetaClass` for the given object
+and delegate the method resolution to the metaclass via
+gapid:groovy.lang.MetaClass#invokeMethod(java.lang.Class,java.lang.Object,java.lang.String,java.lang.Object,boolean,boolean)[MetaClass#invokeMethod]
+which should not be confused with
+gapid:groovy.lang.GroovyObject#invokeMethod(java.lang.String,java.lang.Object)[GroovyObject#invokeMethod]
+which happens to be a method that the metaclass may eventually call.
 
 
 ==== The default metaclass `MetaClassImpl`
-By default objects get an instance of `MetaClassImpl` that implements the default method lookup. This method lookup includes looking up of the method in the object class ("regular" method) but also if no method is found this way it will resort to calling `methodMissing` and ultimately gapid:groovy.lang.GroovyObject.html#invokeMethod(java.lang.String,java.lang.Object)[GroovyObject#invokeMethod]
+
+By default, objects get an instance of `MetaClassImpl` that implements the default method lookup.
+This method lookup includes looking up of the method in the object class ("regular" method) but also if no
+method is found this way it will resort to calling `methodMissing` and ultimately
+gapid:groovy.lang.GroovyObject#invokeMethod(java.lang.String,java.lang.Object)[GroovyObject#invokeMethod]
 
 
 [source,groovy]
@@ -360,7 +387,6 @@ def f = new Foo()
 
 assert f.metaClass =~ /MetaClassImpl/
 ----
-
 
 
 ==== Custom metaclasses
@@ -397,7 +423,7 @@ assert f.BAR() == "BAR" // the new metaclass routes .BAR() to .bar() and upperca
 
 ===== Magic package
 
-It is possible to change the metaclass at startup time by giving the metaclass a specially crafted (magic) class name  and package name. In order to change the metaclass for `java.lang.Integer` it's enough to put a class `groovy.runtime.metaclass.java.lang.IntegerMetaClass` in the classpath. This is useful, for example,  when working with frameworks if you want to to metaclass changes before your code is executed by the framework. The general form of the magic package is `groovy.runtime.metaclass.[package].[class]MetaClass`. In the example below the `[package]` is `java.lang` and the `[class]` is `Integer`:
+It is possible to change the metaclass at startup time by giving the metaclass a specially crafted (magic) class name  and package name. In order to change the metaclass for `java.lang.Integer` it's enough to put a class `groovy.runtime.metaclass.java.lang.IntegerMetaClass` in the classpath. This is useful, for example,  when working with frameworks if you want to do metaclass changes before your code is executed by the framework. The general form of the magic package is `groovy.runtime.metaclass.[package].[class]MetaClass`. In the example below the `[package]` is `java.lang` and the `[class]` is `Integer`:
 
 
 [source,groovy]
@@ -837,8 +863,7 @@ and what are the disadvantages of this technique.
 Groovy comes with various AST transformations covering different needs: reducing boilerplate (code generation), implementing
 design patterns (delegation, ...), logging, declarative concurrency, cloning, safer scripting, tweaking the compilation,
 implementing Swing patterns, testing and eventually managing dependencies. If none of those AST transformations cover
-your needs, you can still implement your own, as show in section <<developing-ast-xforms,Developing your own AST
-transformations>>.
+your needs, you can still implement your own, as show in section <<developing-ast-xforms,Developing your own AST transformations>>.
 
 AST transformations can be separated into two categories:
 
@@ -1321,8 +1346,9 @@ The `Ruby` version can be disabled by setting the `auto` flag to `false`.
 [[xform-Sortable]]
 ===== `@groovy.transform.Sortable`
 
-The `@Sortable` AST transformation is used to help write classes that are `Comparable` and easily sorted by
-numerous properties. It is easy to use as shown in the following example where we annotate the `Person` class:
+The `@Sortable` AST transformation is used to help write classes that are `Comparable` and easily sorted
+typically by numerous properties. It is easy to use as shown in the following example where we annotate
+the `Person` class:
 
 [source,groovy]
 ----
@@ -1379,6 +1405,28 @@ This `Person` class can be used as follows:
 ----
 include::{projectdir}/src/spec/test/CodeGenerationASTTransformsTest.groovy[tags=sortable_custom_usage,indent=0]
 ----
+
+The behavior of the `@Sortable` AST transformation can be further changed using the following additional parameters:
+
+[cols="1,1,2,3a",options="header"]
+|=======================================================================
+|Attribute|Default value|Description|Example
+|allProperties|True|Should JavaBean properties (ordered after native properties) be used|
+[source,groovy]
+----
+include::{projectdir}/src/spec/test/CodeGenerationASTTransformsTest.groovy[tags=sortable_example_allProperties,indent=0]
+----
+|allNames|False|Should properties with "internal" names be used|
+[source,groovy]
+----
+include::{projectdir}/src/spec/test/CodeGenerationASTTransformsTest.groovy[tags=sortable_example_allNames,indent=0]
+----
+|includeSuperProperties|False|Should super properties also be used (ordered first)|
+[source,groovy]
+----
+include::{projectdir}/src/spec/test/CodeGenerationASTTransformsTest.groovy[tags=sortable_example_superProperties,indent=0]
+----
+|=======================================================================
 
 [[xform-Builder]]
 ===== `@groovy.transform.builder.Builder`
@@ -1946,7 +1994,21 @@ _protectedCacheSize>0_ would create an unlimited cache with some results protect
 [[xform-TailRecursive]]
 ===== `@groovy.transform.TailRecursive`
 
-TBD
+The `@TailRecursive` annotation can be used to automatically transform a recursive call at the end of a method
+into an equivalent iterative version of the same code. This avoids stack overflow due to too many recursive calls.
+Below is an example of use when calculating factorial:
+
+[source,groovy]
+----
+include::{projectdir}/src/spec/test/ClassDesignASTTransformsTest.groovy[tags=tailrecursive,indent=0]
+----
+
+Currently, the annotation will only work for self-recursive method calls, i.e. a single recursive call to the exact same method again.
+Consider using Closures and `trampoline()` if you have a scenario involving simple mutual recursion.
+Also note that only non-void methods are currently handled (void calls will result in a compilation error).
+
+CAUTION: Currently, some forms of method overloading can trick the compiler,
+and some non-tail recursive calls are erroneously treated as tail recursive.
 
 [[xform-Singleton]]
 ===== `@groovy.lang.Singleton`
@@ -2597,35 +2659,35 @@ Here, the `add` method will have final parameters but the `mult` method will rem
 [[xform-AnnotationCollector]]
 ===== `@groovy.transform.AnnotationCollector`
 
-`@AnnotationCollector` allows the creation of meta-annotations, which are described in a <<meta-annotations,dedicated section>>.
+`@AnnotationCollector` allows the creation of meta-annotations, which are described in a <<core-object-orientation#_meta_annotations,dedicated section>>.
 
 [[xform-TypeChecked]]
 ===== `@groovy.transform.TypeChecked`
 
-`@TypeChecked` activates compile-time type checking on your Groovy code. See <<section-typechecked,section on type checking>> for details.
+`@TypeChecked` activates compile-time type checking on your Groovy code. See <<core-semantics#static-type-checking,section on type checking>> for details.
 
 [[xform-CompileStatic]]
 ===== `@groovy.transform.CompileStatic`
 
-`@CompileStatic` activates static compilation on your Groovy code. See <<section-typechecked,section on type checking>> for details.
+`@CompileStatic` activates static compilation on your Groovy code. See <<core-semantics#static-type-checking,section on type checking>> for details.
 
 [[xform-CompileDynamic]]
 ===== `@groovy.transform.CompileDynamic`
 
-`@CompileDynamic` disables static compilation on parts of your Groovy code. See <<section-typechecked,section on type checking>> for details.
+`@CompileDynamic` disables static compilation on parts of your Groovy code. See <<core-semantics#static-type-checking,section on type checking>> for details.
 
 [[xform-DelegatesTo]]
 ===== `@groovy.lang.DelegatesTo`
 
 `@DelegatesTo` is not, technically speaking, an AST transformation. It is aimed at documenting code and helping the compiler in case you are
 using <<xform-TypeChecked,type checking>> or <<xform-CompileStatic, static compilation>>. The annotation is described thoroughly in the
-<<section-delegatesto,DSL section>> of this guide.
+<<core-domain-specific-languages.adoc#section-delegatesto,DSL section>> of this guide.
 
 [[xform-SelfType]]
 ===== `@groovy.transform.SelfType`
 
 `@SelfType` is not an AST transformation but rather a marker interface used
-with traits. See the <<traits-selftype,traits documentation>> for further details.
+with traits. See the <<core-traits#traits-selftype,traits documentation>> for further details.
 
 ==== Swing patterns
 
@@ -2715,7 +2777,7 @@ include::{projectdir}/src/spec/test/SwingASTTransformsTest.groovy[tags=vetoable_
 
 ==== Test assistance
 [[xform-NotYetImplemented]]
-===== `@groovy.transform.NotYetImplemented`
+===== `@groovy.test.NotYetImplemented`
 
 `@NotYetImplemented` is used to invert the result of a JUnit 3/4 test case. It is in particular useful if a feature is not yet implemented but the test is. In that case, it is expected
 that the test fails. Marking it with `@NotYetImplemented` will inverse the result of the test, like in this example:
@@ -2821,7 +2883,7 @@ include::{projectdir}/src/spec/test/TestingASTTransformsTest.groovy[tags=memoriz
 ===== `@groovy.lang.Grapes`
 
 `Grape` is a dependency management engine embedded into Groovy, relying on several annotations which are described
-thoroughly in this <<section-grape,section of the guide>>.
+thoroughly in this <<grape#section-grape,section of the guide>>.
 
 [[developing-ast-xforms]]
 === Developing AST transformations
@@ -2995,7 +3057,7 @@ Global AST transformation are similar to local one with a major difference: they
 they are applied _globally_, that is to say on each class being compiled. It is therefore very important to limit their
 use to last resort, because it can have a significant impact on the compiler performance.
 
-Following the example of the <<transform-local, local AST transformation>>, imagine that we would like to trace all
+Following the example of the <<transform-local,local AST transformation>>, imagine that we would like to trace all
 methods, and not only those which are annotated with `@WithLogging`. Basically, we need this code to behave the same
 as the one annotated with `@WithLogging` before:
 

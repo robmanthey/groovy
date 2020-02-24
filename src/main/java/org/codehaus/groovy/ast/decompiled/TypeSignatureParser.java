@@ -22,16 +22,13 @@ import org.codehaus.groovy.ast.ClassHelper;
 import org.codehaus.groovy.ast.ClassNode;
 import org.codehaus.groovy.ast.GenericsType;
 import org.codehaus.groovy.control.CompilerConfiguration;
-import org.codehaus.groovy.vmplugin.v5.Java5;
+import org.codehaus.groovy.vmplugin.v8.Java8;
 import org.objectweb.asm.Type;
 import org.objectweb.asm.signature.SignatureVisitor;
 
 import java.util.ArrayList;
 import java.util.List;
 
-/**
-* @author Peter Gromov
-*/
 abstract class TypeSignatureParser extends SignatureVisitor {
     private final AsmReferenceResolver resolver;
 
@@ -47,7 +44,7 @@ abstract class TypeSignatureParser extends SignatureVisitor {
 
     @Override
     public void visitTypeVariable(String name) {
-        finished(Java5.configureTypeVariableReference(name));
+        finished(Java8.configureTypeVariableReference(name));
     }
 
     @Override

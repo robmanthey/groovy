@@ -20,9 +20,7 @@
 import org.apache.tools.ant.filters.ReplaceTokens
 import org.codehaus.groovy.gradle.JarJarTask
 
-apply plugin: 'osgi'
-
-group = 'org.codehaus.groovy'
+group = 'org.apache.groovy'
 archivesBaseName = 'groovy'
 
 ext.srcSpec = copySpec {
@@ -36,6 +34,7 @@ ext.srcSpec = copySpec {
                 'classes/**',
                 'cruise/**',
                 'src/install/**', // CI file
+                '.asf.yaml', // ASF metadata file for github integration
                 '.travis.yml', // CI file
                 'appveyor.yml', // CI file
                 'jitpack.yml', // CI file
@@ -99,10 +98,10 @@ def excludedFromManifest = [
 ext.allManifest = manifest {
     attributes(
             'Extension-Name': 'groovy',
-            'Specification-Title': 'Groovy: a powerful, dynamic language for the JVM',
+            'Specification-Title': 'Groovy: a powerful, multi-faceted language for the JVM',
             'Specification-Version': groovyBundleVersion,
             'Specification-Vendor': 'The Apache Software Foundation',
-            'Implementation-Title': 'Groovy: a powerful, dynamic language for the JVM',
+            'Implementation-Title': 'Groovy: a powerful, multi-faceted language for the JVM',
             'Implementation-Version': groovyBundleVersion,
             'Implementation-Vendor': 'The Apache Software Foundation',
             'Bundle-ManifestVersion': '2',
@@ -113,7 +112,7 @@ ext.allManifest = manifest {
             'Bundle-ClassPath': '.',
             'Eclipse-BuddyPolicy': 'dependent',
             'DynamicImport-Package': '*',
-            'Main-class': 'groovy.ui.GroovyMain')
+            'Main-Class': 'groovy.ui.GroovyMain')
 }
 
 ext.groovyOsgiManifest = {
@@ -128,6 +127,7 @@ ext.groovyOsgiManifest = {
     version = groovyBundleVersion
     instruction '-nouses', 'true'
     instruction 'Export-Package', "*;version=${groovyBundleVersion}"
+    instruction 'Eclipse-ExtensibleAPI', 'true'
     classpath = sourceSets.main.runtimeClasspath
 }
 
@@ -135,7 +135,7 @@ ext.subprojectOsgiManifest = {
     // Exclude attributes not needed for subprojects.
     from(allManifest) {
         eachEntry { details ->
-            if (details.key in [*excludedFromManifest, 'Bnd-LastModified', 'Extension-Name', 'Bundle-Name', 'Bundle-Description', 'Main-class']) {
+            if (details.key in [*excludedFromManifest, 'Bnd-LastModified', 'Extension-Name', 'Bundle-Name', 'Bundle-Description', 'Main-Class']) {
                 details.exclude()
             }
         }
@@ -143,6 +143,17 @@ ext.subprojectOsgiManifest = {
     version = groovyBundleVersion
     instruction '-nouses', 'true'
     instruction 'Export-Package', "*;version=${groovyBundleVersion}"
+    def folder = new File( "${projectDir}/subprojects/${symbolicName}/src/main/resources/META-INF/services" )
+    if( folder.exists() ) {
+        if (folder.listFiles().count { it.name ==~ /^(?!(org.codehaus.groovy.transform.ASTTransformation)$).*$/ } > 0) {
+            instruction 'Require-Capability', 'osgi.extender;filter:="(osgi.extender=osgi.serviceloader.registrar)"'
+            instruction 'Require-Capability', 'osgi.extender;filter:="(osgi.extender=osgi.serviceloader.processor)"'
+            folder.eachFileMatch(~/^(?!(org.codehaus.groovy.transform.ASTTransformation)$).*$/) {
+                instruction 'Require-Capability', "osgi.serviceloader;filter:=\"(osgi.serviceloader=${it.name})\";cardinality:=multiple"
+                instruction 'Provide-Capability', "osgi.serviceloader;osgi.serviceloader=\"${it.name}\""
+            }
+        }
+    }
     classpath = sourceSets.main.runtimeClasspath
 }
 
@@ -151,7 +162,7 @@ allprojects {
 
     def producedJars = [jar]
     jar {
-        appendix = 'raw'
+        archiveAppendix = 'raw'
         manifest {
             from(allManifest) {
                 eachEntry { details ->
@@ -165,8 +176,8 @@ allprojects {
     if (rootProject.indyCapable()) {
         task jarWithIndy(type: Jar) {
             dependsOn compileGroovyWithIndy
-            classifier = 'indy'
-            appendix = 'raw'
+            archiveClassifier = 'indy'
+            archiveAppendix = 'raw'
             from sourceSets.main.java.outputDir
             from sourceSets.main.groovy.outputDir
             from compileGroovyWithIndy.destinationDir
@@ -191,9 +202,9 @@ allprojects {
 
         task "jar${arch.name}"(type: JarJarTask) {
             dependsOn arch
-            from = file(arch.archivePath)
+            from = file(arch.archiveFile)
             if (project == rootProject) {
-                repackagedLibraries = files(configurations.runtime.incoming.artifactView {
+                repackagedLibraries = files(configurations.runtimeClasspath.incoming.artifactView {
                     componentFilter { component ->
                         if (component instanceof ModuleComponentIdentifier) {
                             return component.module in [
@@ -212,24 +223,24 @@ allprojects {
                     'groovy/cli/picocli/OptionAccessor*.class'
             ]
             patterns = [
-                    'antlr.**'                 : 'groovyjarjarantlr.@1', // antlr2
-                    'org.antlr.**'             : 'groovyjarjarantlr4.@1', // antlr4
-                    'org.objectweb.**'         : 'groovyjarjarasm.@1',
-                    'picocli.**'               : 'groovyjarjarpicocli.@1'
+                    'antlr.**': 'groovyjarjarantlr.@1', // antlr2
+                    'org.antlr.**': 'groovyjarjarantlr4.@1', // antlr4
+                    'org.objectweb.**': 'groovyjarjarasm.@1',
+                    'picocli.**': 'groovyjarjarpicocli.@1'
             ]
             excludesPerLibrary = [
-                    '*': ['META-INF/maven/**', 'META-INF/*', 'META-INF/services/javax.annotation.processing.Processor', 'module-info.class']
+                    '*': ['META-INF/maven/**', 'META-INF/*', 'META-INF/services/javax.annotation.processing.Processor', '**/module-info.class']
             ]
             includesPerLibrary = [
                     'asm-util': ['org/objectweb/asm/util/Printer.class',
-                                 'org/objectweb/asm/util/Textifier.class',
+                                 'org/objectweb/asm/util/Textifier*',
                                  'org/objectweb/asm/util/ASMifier.class',
                                  'org/objectweb/asm/util/Trace*']
             ]
             outputFile = file("$buildDir/libs/${arch.baseName}-${arch.version}${arch.classifier ? '-' + arch.classifier : ''}.jar")
 
             withManifest {
-                def moduleName = "org.codehaus.${project.name.replace('-', '.')}"
+                def moduleName = "org.apache.${project.name.replace('-', '.')}"
                 attributes('Automatic-Module-Name': moduleName)
                 from(allManifest) {
                     eachEntry { details ->
@@ -264,12 +275,12 @@ allprojects {
             patterns = [
                     'com.googlecode.openbeans.**': 'groovyjarjaropenbeans.@1',
                     'org.apache.harmony.beans.**': 'groovyjarjarharmonybeans.@1',
-                    'java.beans.**'              : 'groovyjarjaropenbeans.@1'
+                    'java.beans.**': 'groovyjarjaropenbeans.@1'
             ]
             excludesPerLibrary = [
                     '*': ['META-INF/NOTICE']
             ]
-            excludes = ['META-INF/NOTICE','META-INF/INDEX.LIST']
+            excludes = ['META-INF/NOTICE', 'META-INF/INDEX.LIST']
             createManifest = false
             includedResources = [
                     ("$rootProject.projectDir/notices/${isRoot ? 'NOTICE-GROOIDJARJAR' : 'NOTICE-GROOID'}".toString()): 'META-INF/NOTICE'
@@ -313,32 +324,34 @@ task sourceAllJar(type: Jar, dependsOn: { modules()*.sourceJar + rootProject.sou
     modules()*.sourceJar.each {
         with it.rootSpec
     }
-    baseName = 'groovy-all'
-    classifier = 'sources'
+    archiveBaseName = 'groovy-all'
+    archiveClassifier = 'sources'
 }
 
 allprojects {
     task javadocJar(type: Jar, dependsOn: javadoc) {
         from javadoc.destinationDir
-        classifier = 'javadoc'
+        archiveClassifier = 'javadoc'
     }
     task groovydocJar(type: Jar, dependsOn: groovydoc) {
         from groovydoc.destinationDir
-        classifier = 'groovydoc'
+        archiveClassifier = 'groovydoc'
     }
 }
 
 task javadocAllJar(type: Jar, dependsOn: javadocAll) {
-    baseName = 'groovy-all'
+    archiveBaseName = 'groovy-all'
     from javadocAll.destinationDir
-    classifier = 'javadoc'
+    archiveClassifier = 'javadoc'
 }
 
 task groovydocAllJar(type: Jar, dependsOn: groovydocAll) {
-    baseName = 'groovy-all'
+    archiveBaseName = 'groovy-all'
     from groovydocAll.destinationDir
-    classifier = 'groovydoc'
+    archiveClassifier = 'groovydoc'
 }
+
+evaluationDependsOn('groovy-jaxb')
 
 ext.distSpec = copySpec {
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
@@ -349,17 +362,18 @@ ext.distSpec = copySpec {
     into('lib') {
         from jarjar
         from modules()*.jarjar
-        from(configurations.runtime) {
+        from(configurations.runtimeClasspath) {
             exclude {
                 it.file.name.startsWith('openbeans-') ||
                         it.file.name.startsWith('asm-') ||
                         it.file.name.startsWith('antlr-') ||
-                        it.file.name.startsWith('antlr4-')
+                        it.file.name.startsWith('antlr4-') ||
+                        it.file.name.startsWith('picocli-')
             }
         }
         from('src/bin/groovy.icns')
     }
-    modules().configurations.runtime.each { conf ->
+    modules().configurations.runtimeClasspath.each { conf ->
         into('lib') {
             from(conf) {
                 exclude {
@@ -368,10 +382,15 @@ ext.distSpec = copySpec {
                             it.file.name.startsWith('asm-') ||
                             it.file.name.startsWith('antlr-') ||
                             it.file.name.startsWith('antlr4-') ||
-                            it.file.name.startsWith('openbeans-')
+                            it.file.name.startsWith('openbeans-') ||
+                            it.file.name.startsWith('picocli-')
                 }
             }
         }
+    }
+    into('lib/extras-jaxb') {
+        from project(':groovy-jaxb').configurations.jaxb
+        from project(':groovy-jaxb').configurations.jaxbRuntime
     }
     if (!rootProject.hasProperty('skipIndy')) {
         into('indy') {
@@ -416,8 +435,8 @@ ext.distSpec = copySpec {
 }
 
 task distBin(type: Zip) {
-    baseName = 'apache-groovy'
-    appendix = 'binary'
+    archiveBaseName = 'apache-groovy'
+    archiveAppendix = 'binary'
     into("groovy-$version") {
         with distSpec
     }
@@ -429,8 +448,8 @@ task distBin(type: Zip) {
 }
 
 task distDoc(type: Zip, dependsOn: doc) {
-    baseName = 'apache-groovy'
-    appendix = 'docs'
+    archiveBaseName = 'apache-groovy'
+    archiveAppendix = 'docs'
     into("groovy-$version") {
         with docSpec
     }
@@ -451,8 +470,8 @@ task syncDoc(type: Copy, dependsOn: doc) {
 }
 
 task distSrc(type: Zip) {
-    baseName = 'apache-groovy'
-    appendix = 'src'
+    archiveBaseName = 'apache-groovy'
+    archiveAppendix = 'src'
     into("groovy-$version")
     with srcSpec
 }
@@ -489,7 +508,7 @@ distBin.dependsOn checkNoSnapshotVersions
 
 task dist(type: Zip, dependsOn: [checkCompatibility, distBin, distSrc, distDoc, syncDoc]) {
     description = 'Generates the binary, sources, documentation and full distributions'
-    baseName = 'apache-groovy'
+    archiveBaseName = 'apache-groovy'
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     appendix 'sdk'
     into "groovy-$version"
@@ -504,9 +523,10 @@ task dist(type: Zip, dependsOn: [checkCompatibility, distBin, distSrc, distDoc, 
         with srcSpec
     }
 
-    if ((version.endsWith('SNAPSHOT') && !groovyBundleVersion.endsWith('SNAPSHOT'))
-            || (!version.endsWith('SNAPSHOT') && groovyBundleVersion.endsWith('SNAPSHOT'))) {
-        throw new GradleException("Incoherent versions. Found groovyVersion=$version and groovyBundleVersion=$groovyBundleVersion")
+    def av = version
+    if ((av.endsWith('SNAPSHOT') && !groovyBundleVersion.endsWith('SNAPSHOT'))
+            || (!av.endsWith('SNAPSHOT') && groovyBundleVersion.endsWith('SNAPSHOT'))) {
+        throw new GradleException("Incoherent versions. Found groovyVersion=$av and groovyBundleVersion=$groovyBundleVersion")
     }
 }
 
@@ -533,21 +553,20 @@ task updateLicenses {
         def jarjarFiles = fileTree(licensesDir).include('*-JARJAR*.txt').sort { it.name }
         def binzipFiles = fileTree(licensesDir) {
             include '*-JARJAR*.txt'
-            include '*-ALLJARJAR*.txt'
             include '*-BINZIP*.txt'
         }.sort { it.name }
         def docgeneratorFiles = fileTree(licensesDir).include('normalize-stylesheet-groovy-docgenerator.txt')
         def groovydocFiles = fileTree(licensesDir).include('normalize-stylesheet-groovy-groovydoc.txt')
-        def jsr223Files = fileTree(licensesDir).include('jsr223-ALLJARJAR-SRC.txt')
+        def jsr223Files = fileTree(licensesDir).include('jsr223-BINZIP-SRC.txt')
         def licenseHdr = '\n\n------------------------------------------------------------------------\n\n'
         [
-                (licenseBinZipFile)      : binzipFiles,
-                (licenseDocFile)         : docFiles,
-                (licenseJarJarFile)      : jarjarFiles,
-                (licenseSrcFile)         : srcFiles,
+                (licenseBinZipFile): binzipFiles,
+                (licenseDocFile): docFiles,
+                (licenseJarJarFile): jarjarFiles,
+                (licenseSrcFile): srcFiles,
                 (licenseDocGeneratorFile): docgeneratorFiles,
-                (licenseGroovyDocFile)   : groovydocFiles,
-                (licenseJsr223File)      : jsr223Files,
+                (licenseGroovyDocFile): groovydocFiles,
+                (licenseJsr223File): jsr223Files,
         ].each { outFile, inFiles ->
             file(outFile).withWriter('utf-8') { writer ->
                 writer << ([file(licenseBaseFile)] + inFiles).collect {
@@ -572,14 +591,13 @@ task updateNotices {
 
     ext.noticeSrcFile = "${projectDir}/NOTICE"
     ext.noticeGroovyConsoleFile = "${projectDir}/subprojects/groovy-console/NOTICE"
-    ext.noticeAllJarJarFile = "${noticesDir}/NOTICE-ALLJARJAR"
     ext.noticeBinZipFile = "${noticesDir}/NOTICE-BINZIP"
     ext.noticeGrooidFile = "${noticesDir}/NOTICE-GROOID"
     ext.noticeGrooidJarJarFile = "${noticesDir}/NOTICE-GROOIDJARJAR"
     ext.noticeJarJarFile = "${noticesDir}/NOTICE-JARJAR"
     ext.noticeSdkFile = "${noticesDir}/NOTICE-SDK"
     inputs.files(noticeBaseFile, fileTree(noticesDir).include('*.txt'))
-    outputs.files(noticeAllJarJarFile, noticeBinZipFile, noticeGrooidFile, noticeGrooidJarJarFile,
+    outputs.files(noticeBinZipFile, noticeGrooidFile, noticeGrooidJarJarFile,
             noticeJarJarFile, noticeSrcFile, noticeGroovyConsoleFile, noticeSdkFile)
 
     doLast {
@@ -592,17 +610,16 @@ task updateNotices {
         }.sort { it.name }
         def binzipFiles = fileTree(noticesDir) {
             include '*-JARJAR*.txt'
-            include '*-ALLJARJAR*.txt'
             include '*-GROOID*.txt'
             include '*-BINZIP*.txt'
         }.sort { it.name }
-        def groovyconsoleFiles = fileTree(noticesDir).include('silkicons-ALLJARJAR-SRC.txt')
+        def groovyconsoleFiles = fileTree(noticesDir).include('silkicons-BINZIP-SRC.txt')
         [
-                (noticeBinZipFile)       : binzipFiles,
-                (noticeGrooidFile)       : grooidFiles,
-                (noticeGrooidJarJarFile) : grooidJarjarFiles,
-                (noticeJarJarFile)       : jarjarFiles,
-                (noticeSrcFile)          : srcFiles,
+                (noticeBinZipFile): binzipFiles,
+                (noticeGrooidFile): grooidFiles,
+                (noticeGrooidJarJarFile): grooidJarjarFiles,
+                (noticeJarJarFile): jarjarFiles,
+                (noticeSrcFile): srcFiles,
                 (noticeGroovyConsoleFile): groovyconsoleFiles,
         ].each { outFile, inFiles ->
             file(outFile).withWriter('utf-8') { writer ->

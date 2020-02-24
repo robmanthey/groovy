@@ -19,12 +19,13 @@
 import groovy.text.markup.MarkupTemplateEngine
 import groovy.text.markup.TemplateConfiguration
 
-allprojects {
+allprojects { proj ->
     apply plugin: "org.nosphere.apache.rat"
     //apply plugin: "com.github.hierynomus.license"
     apply plugin: 'checkstyle'
     apply plugin: 'codenarc'
-    apply plugin: 'findbugs'
+//    apply plugin: 'com.github.spotbugs'
+    apply plugin: 'jp.skypencil.spotbugs.snom'
     configurations.codenarc {
         // because we will rely on the version we build
         // because version ranges are evil
@@ -36,6 +37,18 @@ allprojects {
             substitute module("org.codehaus.groovy:groovy-xml") with project(":groovy-xml")
             substitute module("org.codehaus.groovy:groovy-groovydoc") with project(":groovy-groovydoc")
         }
+
+        exclude module: 'groovy-all'
+    }
+
+    dependencies {
+        checkstyle "com.puppycrawl.tools:checkstyle:8.28"
+        codenarc "org.codenarc:CodeNarc:1.5"
+        spotbugs 'com.github.spotbugs:spotbugs:3.1.11'
+        if (proj.name.contains('jaxb') && JavaVersion.current().isJava9Compatible()) {
+            spotbugs 'javax.xml.bind:jaxb-api:2.3.0'
+        }
+        codenarc project(":groovy-templates")
     }
 
 //    license {
@@ -59,9 +72,12 @@ allprojects {
 
     // don't fail build on CodeNarc tasks
     tasks.withType(CodeNarc) {
-        dependsOn jar
+        //dependsOn jar
         ignoreFailures = true
         configFile = file("$rootProject.projectDir/config/codenarc/codenarc.groovy")
+        doFirst {
+            configurations.codenarc.files.each { println it }
+        }
     }
 
     tasks.withType(Checkstyle) {
@@ -70,10 +86,6 @@ allprojects {
         configFile = file("$rootProject.projectDir/config/checkstyle/checkstyle.xml")
         configProperties = ['rootProject.projectDir': rootProject.projectDir]
         def reportFile = file("${buildDir}/reports/checkstyle/${name}.xml")
-        source = sourceSets.main.allJava.matching {
-            // TODO why doesn't this exclusion work?
-            exclude '**/generated-sources/**/*'
-        }
         reports {
             include ( '**/*.java')
             xml {
@@ -99,8 +111,7 @@ allprojects {
                     def xml = new XmlSlurper().parse(reportFile.newReader('utf-8'))
                     def files = []
                     xml.file.each { f ->
-                        // TODO remove generated-sources check once exclude above works
-                        if (f.error.size() && !f.@name.toString().contains('generated-sources')) {
+                        if (f.error.size() && !f.@name.toString().matches('.*[/\\\\]generated[/\\\\].*')) {
                             files << [
                                     name: f.@name.toString(),
                                     errors: f.error.collect { e ->
@@ -127,18 +138,20 @@ allprojects {
         }
     }
 
-    findbugs {
-        // continue build despite findbug warnings
+    tasks.withType(SpotBugsTask) {
+        // TODO work out why the following aren't being set automatically
+        if (proj.name.contains('jaxb')) {
+            reportsDir = file("$buildDir/reports/spotbugs")
+            projectName = proj.name
+            release = rootProject.version
+        }
         ignoreFailures = true
-        sourceSets = [sourceSets.main]
-    }
-    tasks.withType(FindBugs) {
         effort = 'max'
+        maxHeapSize = '2g'
         reports {
             xml.enabled = false
             html.enabled = true
         }
-        maxHeapSize = '2g'
     }
 }
 
@@ -152,30 +165,33 @@ subprojects { sp ->
                     'src/test/resources/includes/hello-escaped.txt',
                     'src/test/resources/includes/hello.html'
             ]
-            break;
+            break
         case ['groovy-groovydoc', 'groovy-docgenerator']:
             extras = [
                     '**/stylesheet.css'  // MIT license as per NOTICE/LICENSE files
             ]
-            break;
+            break
     }
     rat {
-        inputDir = sp.projectDir.absolutePath
+        inputDir = sp.projectDir
         excludes = [ 'target/**', 'build/**', '.gradle/**', '*.iml', '.classpath', '.project', '.settings/**', 'bin/**' , *extras]
     }
 }
 
 rat {
+    inputDir = projectDir
     excludes = [ 'subprojects/**', // covered above
                  'benchmark/**', // benchmarking files excluded from src zip
+                 '.asf.yaml', // ASF metadata for github integration excluded from src zip
                  'config/**',
                  'src/install/**', // CI file excluded from src zip
                  'src/test/org/codehaus/groovy/ast/LineColumnCheck.txt', // test file
                  'security/groovykeys', // excluded from src zip
                  '**/.gradle/**', '**/wrapper/**', 'gradlew*',  // gradle wrapper files excluded from src zip
+                 'artifactory.properties',  // potential file on CI server
                  'gradle.properties',  // artifactory release plugin removes header when bumping version
                  '**/target/**', '**/build/**', 'licenses/**', 'notices/**',
-                 'out/**', '*.ipr',  '**/*.iml', '*.iws', // Intellij files
+                 'out/**', '*.ipr',  '**/*.iml', '*.iws', '.idea/**', // Intellij files
                  '**/style.css', // MIT license as per NOTICE/LICENSE files
                  '**/jquery-2.1.1.min.js', // MIT license as per NOTICE/LICENSE files
                  '.classpath', '.project', '.settings/**', 'bin/**', // Eclipse files
@@ -183,5 +199,3 @@ rat {
 }
 
 apply from: 'gradle/jacoco/jacoco.gradle'
-// Temporarily disabled because of conflict
-apply from: 'gradle/binarycompatibility.gradle'

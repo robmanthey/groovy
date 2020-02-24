@@ -18,6 +18,8 @@
  */
 package org.apache.groovy.parser.antlr4
 
+import groovy.test.GroovyTestCase
+import org.apache.groovy.parser.antlr4.util.ASTComparatorCategory
 import org.codehaus.groovy.ast.ClassNode
 import org.codehaus.groovy.ast.FieldNode
 import org.codehaus.groovy.ast.MethodNode
@@ -25,6 +27,7 @@ import org.codehaus.groovy.ast.Parameter
 import org.codehaus.groovy.ast.PropertyNode
 import org.codehaus.groovy.ast.stmt.AssertStatement
 import org.codehaus.groovy.ast.stmt.ExpressionStatement
+import org.codehaus.groovy.control.CompilerConfiguration
 import org.codehaus.groovy.syntax.Token
 
 import static org.apache.groovy.parser.antlr4.TestUtils.doRunAndTest
@@ -34,11 +37,7 @@ import static org.apache.groovy.parser.antlr4.TestUtils.doTest
 /**
  * Some basic test cases for the new parser
  */
-class GroovyParserTest extends GroovyTestCase {
-
-    void setUp() {}
-
-    void tearDown() {}
+final class GroovyParserTest extends GroovyTestCase {
 
     void "test groovy core - Comments"() {
         doTest('core/Comments_01.groovy', [ExpressionStatement])
@@ -52,8 +51,7 @@ class GroovyParserTest extends GroovyTestCase {
             def a = 123
         '''
 
-        def antlr4Parser = new org.apache.groovy.parser.Antlr4Parser()
-        antlr4Parser.parse(f)
+        TestUtils.createAntlr4Shell().evaluate(f)
 
         boolean deleted = f.delete()
         assert deleted: "Failed to delete file: ${f.getAbsolutePath()}"
@@ -73,7 +71,9 @@ class GroovyParserTest extends GroovyTestCase {
     }
 
     private static doTestAttachedComments() {
-        def (newAST, oldAST) = doTest('core/Comments_02.groovy')
+        CompilerConfiguration compilerConfiguration = new CompilerConfiguration(CompilerConfiguration.DEFAULT)
+        compilerConfiguration.setOptimizationOptions([(CompilerConfiguration.GROOVYDOC): true])
+        def (newAST, oldAST) = doTest('core/Comments_02.groovy', ASTComparatorCategory.DEFAULT_CONFIGURATION, compilerConfiguration)
         List<ClassNode> classes = new ArrayList<>(newAST.classes).sort { c1, c2 -> c1.name <=> c2.name }
         List<MethodNode> methods = new ArrayList<>(newAST.methods).sort { m1, m2 -> m1.name <=> m2.name }
 
@@ -273,6 +273,7 @@ class GroovyParserTest extends GroovyTestCase {
         doRunAndTestAntlr4('core/SafeIndex_01x.groovy')
         doRunAndTestAntlr4('core/SafeIndex_02x.groovy')
         doRunAndTestAntlr4('core/SafeIndex_03x.groovy')
+        doRunAndTestAntlr4('core/SafeIndex_04x.groovy')
     }
 
     void "test groovy core - NegativeRelationalOperators"() {
@@ -333,12 +334,12 @@ class GroovyParserTest extends GroovyTestCase {
 
     void "test groovy core - InterfaceDeclaration"() {
         doTest('core/InterfaceDeclaration_01.groovy')
-        doTest('core/InterfaceDeclaration_02.groovy')
+        doTest('core/InterfaceDeclaration_02.groovy', [PropertyNode, FieldNode])
         doTest('core/InterfaceDeclaration_03.groovy')
     }
 
     void "test groovy core - EnumDeclaration"() {
-        doTest('core/EnumDeclaration_01.groovy')
+        doTest('core/EnumDeclaration_01.groovy', [PropertyNode, FieldNode])
         doTest('core/EnumDeclaration_02.groovy', [ExpressionStatement])
         doTest('core/EnumDeclaration_03.groovy')
         doTest('core/EnumDeclaration_04.groovy')
@@ -384,7 +385,10 @@ class GroovyParserTest extends GroovyTestCase {
     }
 
     void "test groovy core - Groovydoc"() {
-        doRunAndTestAntlr4('core/Groovydoc_01x.groovy')
+        CompilerConfiguration compilerConfiguration = new CompilerConfiguration(CompilerConfiguration.DEFAULT)
+        compilerConfiguration.setOptimizationOptions([(CompilerConfiguration.RUNTIME_GROOVYDOC): true])
+
+        doRunAndTestAntlr4('core/Groovydoc_01x.groovy', compilerConfiguration)
     }
 
     void "test groovy core - Script"() {
@@ -427,7 +431,11 @@ class GroovyParserTest extends GroovyTestCase {
         doRunAndTestAntlr4('bugs/GROOVY-8228.groovy')
         doRunAndTestAntlr4('bugs/BUG-GROOVY-8311.groovy')
         doRunAndTest('bugs/BUG-GROOVY-8426.groovy')
-        doTest('bugs/BUG-GROOVY-8511.groovy');
+        doTest('bugs/BUG-GROOVY-8511.groovy')
         doRunAndTestAntlr4('bugs/BUG-GROOVY-8613.groovy')
+        doTest('bugs/BUG-GROOVY-8641.groovy')
+        doTest('bugs/BUG-GROOVY-8913.groovy')
+        doRunAndTestAntlr4('bugs/BUG-GROOVY-8991.groovy')
+        doTest('bugs/BUG-GROOVY-9399.groovy')
     }
 }

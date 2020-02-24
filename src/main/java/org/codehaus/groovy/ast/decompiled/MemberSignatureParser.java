@@ -34,8 +34,10 @@ import org.objectweb.asm.signature.SignatureVisitor;
 import java.util.List;
 import java.util.Map;
 
+import static org.codehaus.groovy.ast.tools.GeneralUtils.nullX;
+
 /**
- * @author Peter Gromov
+ * Utility methods for lazy class loading
  */
 class MemberSignatureParser {
     static MethodNode createMethodNode(final AsmReferenceResolver resolver, MethodStub method) {
@@ -97,8 +99,16 @@ class MemberSignatureParser {
         }
 
         Parameter[] parameters = new Parameter[parameterTypes.length];
+        List<String> parameterNames = method.parameterNames;
         for (int i = 0; i < parameterTypes.length; i++) {
-            parameters[i] = new Parameter(parameterTypes[i], "param" + i);
+            String parameterName = "param" + i;
+            if (parameterNames != null && i < parameterNames.size()) {
+                String decompiledName = parameterNames.get(i);
+                if (decompiledName != null) {
+                    parameterName = decompiledName;
+                }
+            }
+            parameters[i] = new Parameter(parameterTypes[i], parameterName);
         }
 
         if (method.parameterAnnotations != null) {
@@ -117,12 +127,16 @@ class MemberSignatureParser {
             result = new ConstructorNode(method.accessModifiers, parameters, exceptions, null);
         } else {
             result = new MethodNode(method.methodName, method.accessModifiers, returnType[0], parameters, exceptions, null);
-            if (method.annotationDefault != null) {
-                result.setCode(new ReturnStatement(new ConstantExpression(method.annotationDefault)));
+            Object annDefault = method.annotationDefault;
+            if (annDefault != null) {
+                if (annDefault instanceof TypeWrapper) {
+                    annDefault = resolver.resolveType(Type.getType(((TypeWrapper) annDefault).desc));
+                }
+                result.setCode(new ReturnStatement(new ConstantExpression(annDefault)));
                 result.setAnnotationDefault(true);
             } else {
                 // Seems wrong but otherwise some tests fail (e.g. TestingASTTransformsTest)
-                result.setCode(new ReturnStatement(ConstantExpression.NULL));
+                result.setCode(new ReturnStatement(nullX()));
             }
 
         }
@@ -133,7 +147,10 @@ class MemberSignatureParser {
     }
 
     private static ClassNode applyErasure(ClassNode genericType, ClassNode erasure) {
-        if (genericType.isGenericsPlaceHolder()) {
+        if (genericType.isArray() && erasure.isArray() && genericType.getComponentType().isGenericsPlaceHolder()) {
+            genericType.setRedirect(erasure);
+            genericType.getComponentType().setRedirect(erasure.getComponentType());
+        } else if (genericType.isGenericsPlaceHolder()) {
             genericType.setRedirect(erasure);
         }
         return genericType;
@@ -149,7 +166,8 @@ class MemberSignatureParser {
                 }
             });
         }
-        return new FieldNode(field.fieldName, field.accessModifiers, type[0], owner, null);
+        ConstantExpression value = field.value == null ? null : new ConstantExpression(field.value);
+        return new FieldNode(field.fieldName, field.accessModifiers, type[0], owner, value);
     }
 }
 

@@ -22,67 +22,44 @@ import org.codehaus.groovy.control.Janitor;
 import org.codehaus.groovy.control.ProcessingUnit;
 
 import java.io.PrintWriter;
-
-
+import java.util.Objects;
 
 /**
- *  A class for error messages produced by the parser system.
- *
- *  @author <a href="mailto:cpoirier@dreaming.org">Chris Poirier</a>
+ * A class for error messages produced by the parser system.
  */
+public class ExceptionMessage extends Message {
 
-public class ExceptionMessage extends Message
-{
-    protected boolean verbose = true;
+    private final Exception cause;
+    protected final boolean debug;
+    protected final ProcessingUnit owner;
 
-    private Exception cause = null;   // The exception source of the message, if any
-    ProcessingUnit owner = null;
-
-    public ExceptionMessage( Exception cause, boolean v, ProcessingUnit owner )
-    {
-        this.verbose = v;
-        this.cause = cause;
+    public ExceptionMessage(final Exception cause, final boolean debug, final ProcessingUnit owner) {
+        this.cause = Objects.requireNonNull(cause);
+        this.debug = debug;
         this.owner = owner;
     }
-    
-    
-   
-   /**
-    *  Returns the underlying Exception.
-    */
 
-    public Exception getCause()
-    {
-        return this.cause;
+    /**
+     * Returns the underlying Exception.
+     */
+    public Exception getCause() {
+        return cause;
     }
-    
 
+    /**
+     * Writes out a nicely formatted summary of the exception.
+     */
+    public void write(final PrintWriter output, final Janitor janitor) {
+        String description = "General error during " + owner.getPhaseDescription() + ": ";
 
-   /**
-    *  Writes out a nicely formatted summary of the exception. 
-    */
-    
-    public void write( PrintWriter output, Janitor janitor )
-    {
-        String description = "General error during " + owner.getPhaseDescription() + ": "; 
-        
         String message = cause.getMessage();
-        if( message != null )
-        {
-            output.println( description + message );
-        }
-        else
-        {
-            output.println( description + cause );
+        if (message != null) {
+            output.println(description + message);
+        } else {
+            output.println(description + cause);
         }
         output.println();
 
-        //if (verbose) {
-            cause.printStackTrace(output);
-        //}
+        /*if (debug)*/ cause.printStackTrace(output);
     }
-    
 }
-
-
-
